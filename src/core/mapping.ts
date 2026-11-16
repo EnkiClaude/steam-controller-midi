@@ -142,8 +142,13 @@ export function sanitizePreset(raw: unknown): Preset | null {
  * The out-of-the-box preset: every input gets its own note or CC on channel 1
  * so the controller is useful in Live's MIDI Map mode straight away.
  * Buttons play a chromatic run from C1 (the Drum Rack's first pad);
- * axes use CCs from 20 up, which have no standard meaning.
+ * axes use CCs 20-31 and then 102-119, which have no standard meaning.
  */
+/** The i-th controller number from the ranges MIDI leaves undefined (20-31, 102-119). */
+export function freeCc(i: number): number {
+  return i < 12 ? 20 + i : Math.min(119, 102 + (i - 12))
+}
+
 export function defaultPreset(): Preset {
   const mappings: Mapping[] = []
   BUTTONS.forEach((def, i) => {
@@ -155,7 +160,7 @@ export function defaultPreset(): Preset {
     mappings.push(
       createMapping(def.id, {
         type: 'cc',
-        cc: 20 + i,
+        cc: freeCc(i),
         // Motion would otherwise move parameters whenever the controller is picked up.
         enabled: !motion,
         gate: motion ? 'rgrip_touch' : null,

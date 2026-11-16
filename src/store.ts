@@ -5,6 +5,7 @@ import { create } from 'zustand'
 import {
   createMapping,
   defaultPreset,
+  freeCc,
   newId,
   sanitizePreset,
   type Mapping,
@@ -150,8 +151,8 @@ export const useApp = create<AppState>((set, get) => {
       const existing = get().presets[get().active].mappings
       const m = createMapping(input)
       const used = new Set(existing.filter((e) => e.type === m.type).map((e) => (m.type === 'note' ? e.note : e.cc)))
-      const start = m.type === 'note' ? 36 : 20
-      for (let n = start; n < 128; n++) {
+      for (let i = 0; i < 92; i++) {
+        const n = m.type === 'note' ? 36 + i : freeCc(i)
         if (!used.has(n)) {
           if (m.type === 'note') m.note = n
           else m.cc = n

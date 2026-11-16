@@ -126,7 +126,12 @@ export const AXES: AxisDef[] = [
 
 export const INPUTS: InputDef[] = [...BUTTONS, ...AXES]
 
-export const INPUT_BY_ID: Record<string, InputDef> = Object.fromEntries(INPUTS.map((i) => [i.id, i]))
+// No prototype, so ids from untrusted presets such as "constructor" or
+// "toString" don't resolve to Object.prototype members.
+export const INPUT_BY_ID: Record<string, InputDef> = Object.assign(
+  Object.create(null),
+  Object.fromEntries(INPUTS.map((i) => [i.id, i])),
+)
 
 export const GROUPS: { id: InputGroup; label: string }[] = [
   { id: 'face', label: 'Face buttons' },

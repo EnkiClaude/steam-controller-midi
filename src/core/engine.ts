@@ -153,6 +153,9 @@ export class Engine {
     if (!live) {
       // Never leave a note hanging when a mapping is muted mid-press.
       if (rt.heldNote) this.setOn(rt, false, out)
+      // A momentary mapping can't stay "on" while muted: if the button is
+      // released meanwhile, the next press would be swallowed as a no-op.
+      else if (!m.toggle) rt.on = false
       return
     }
     if (pressed === was) return
@@ -187,17 +190,31 @@ export class Engine {
     }
     rt.active = true
 
-    let t = shapeAxis(state.axes[m.input] ?? 0, def, m)
+    const target = shapeAxis(state.axes[m.input] ?? 0, def, m)
+    let t = target
     if (m.smooth > 0 && rt.smoothed !== null) {
-      t = rt.smoothed + (t - rt.smoothed) * (1 - m.smooth)
+      t = rt.smoothed + (target - rt.smoothed) * (1 - m.smooth)
+      // The filter stalls a few ulps short of its target, which from below
+      // rounds the centre to 8191 (or CC 63) for good. Land on it exactly.
+      if (Math.abs(target - t) < 1e-6) t = target
     }
     rt.smoothed = t
 
     if (m.type === 'note') {
+      // A bipolar axis rests in the middle, so the note fires on distance
+      // from rest in either direction rather than on absolute position.
+      const travel = def.polarity === 'bipolar' ? Math.abs(t - 0.5) * 2 : t
       // Hysteresis so a value hovering at the threshold doesn't machine-gun.
-      const over = rt.pressed ? t >= m.threshold * 0.85 : t >= m.threshold
+      const over = rt.pressed ? travel >= m.threshold * 0.85 : travel >= m.threshold
       rt.pressed = over
       this.setOn(rt, over, out)
+      return
+    }
+    if (rt.last === -1 && !def.activeWhile && m.gate === null) {
+      // First sample of an always-on axis: remember where it is but stay
+      // quiet, so connecting the controller or editing a mapping doesn't
+      // yank a parameter in the DAW to the axis's rest value.
+      this.sendPosition(rt, t, [])
       return
     }
     this.sendPosition(rt, t, out)

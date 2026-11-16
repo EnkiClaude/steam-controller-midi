@@ -129,6 +129,7 @@ const GYRO_FULL_SCALE_DPS = 2000
 const GYRO_RATE_RANGE_DPS = 360
 /** rotation that maps to full deflection of the yaw axis */
 const YAW_RANGE_DEG = 90
+const GYRO_DEADBAND_DPS = 1.5
 const ACCEL_FULL_SCALE_G = 2
 const ACCEL_SMOOTH = 0.15
 
@@ -226,10 +227,12 @@ function parseState(d: DataView, l: Layout, state: ControllerState, ctx: TritonC
   ax.gyro_y = clamp(gy / GYRO_RATE_RANGE_DPS, -1, 1)
   ax.gyro_z = clamp(gz / GYRO_RATE_RANGE_DPS, -1, 1)
 
-  if (dt > 0) {
+  // Ignore sensor noise while the controller is still, so yaw doesn't creep.
+  if (dt > 0 && Math.abs(gz) > GYRO_DEADBAND_DPS) {
     ctx.yaw = clamp(ctx.yaw + gz * dt, -YAW_RANGE_DEG, YAW_RANGE_DEG)
   }
-  ax.turn = ctx.yaw / YAW_RANGE_DEG
+  // Raw yaw is positive anticlockwise; flip so turning right is positive like the sticks.
+  ax.turn = -ctx.yaw / YAW_RANGE_DEG
 
   const aScale = ACCEL_FULL_SCALE_G / 32768
   const rax = d.getInt16(l.accel, true) * aScale
@@ -248,8 +251,9 @@ function parseState(d: DataView, l: Layout, state: ControllerState, ctx: TritonC
       ctx.az += (raz - ctx.az) * ACCEL_SMOOTH
     }
     // Device axes: X right, Y away from the player, Z up out of the face.
-    ctx.rawPitch = Math.atan2(ctx.ay, ctx.az) / (Math.PI / 2)
-    ctx.rawRoll = Math.atan2(ctx.ax, ctx.az) / (Math.PI / 2)
+    // Signed so tilting forward / right is positive, matching stick up / right.
+    ctx.rawPitch = -Math.atan2(ctx.ay, ctx.az) / (Math.PI / 2)
+    ctx.rawRoll = -Math.atan2(ctx.ax, ctx.az) / (Math.PI / 2)
   }
   ax.tilt_pitch = clamp(ctx.rawPitch - ctx.pitchZero, -1, 1)
   ax.tilt_roll = clamp(ctx.rawRoll - ctx.rollZero, -1, 1)

@@ -62,7 +62,7 @@ and smoothing. Trackpad and gated mappings can hold their last value or snap
 back to rest when you let go. An input can have several mappings.
 
 The **Default** preset gives every input its own note (from C1, the first Drum
-Rack pad) or CC (from CC 20) on channel 1, so it works with Live's MIDI mapping
+Rack pad) or CC (20-31, then 102 up) on channel 1, so it works with Live's MIDI mapping
 straight away. Touch sensors and motion start switched off so they don't fire
 while you're just holding the controller. Presets are saved in the browser and
 can be exported and imported as files.
