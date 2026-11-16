@@ -100,7 +100,7 @@ class Runtime {
   private tick(): void {
     this.stateVersion++
     const { solo } = useApp.getState()
-    this.send(this.engine.process(this.state, solo))
+    this.send(this.engine.process(this.state, solo, performance.now()))
   }
 
   private send(messages: MidiMessage[], force = false): void {
@@ -156,6 +156,8 @@ class Runtime {
       else this.simulated.delete(input)
     } else {
       this.state.axes[input] = Number(value)
+      if (Number(value) !== 0) this.simulated.add(input)
+      else this.simulated.delete(input)
       // Trackpad axes only count while the pad is touched.
       if (def.activeWhile) {
         this.state.buttons[def.activeWhile] = true
@@ -332,7 +334,7 @@ class Runtime {
     if (result.type === 'state') {
       this.lastStateReport = now
       if (app.hid.phase !== 'connected') app.setHid({ phase: 'connected' })
-      for (const id of this.simulated) this.state.buttons[id] = true
+      for (const id of this.simulated) if (id in this.state.buttons) this.state.buttons[id] = true
       this.tick()
     } else if (result.type === 'battery') {
       if (app.hid.battery !== result.level || app.hid.charging !== result.charging) {
@@ -407,6 +409,8 @@ class Runtime {
       }
     } else {
       this.pollGamepad()
+      // Keep time-based (relative) mappings turning while a Test slider is held still.
+      if (this.simulated.size > 0) this.tick()
     }
   }
 

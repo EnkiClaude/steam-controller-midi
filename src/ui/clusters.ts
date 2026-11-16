@@ -2,7 +2,7 @@
 // axes, a click and a touch sensor). The drawing shows one hotspot per
 // cluster and the inspector offers its members as tabs.
 
-import type { Mapping } from '../core/mapping'
+import { gridPadOf, type Mapping } from '../core/mapping'
 
 export interface Cluster {
   id: string
@@ -58,10 +58,13 @@ export const CLUSTER_OF: Record<string, Cluster> = Object.fromEntries(
 )
 
 /** What a mapping occupies in the DAW: two mappings with the same key fight over it. */
-export function destinationKey(m: Mapping): string {
-  if (m.type === 'note') return `note:${m.channel}:${m.note}`
-  if (m.type === 'cc') return `cc:${m.channel}:${m.cc}`
-  return `bend:${m.channel}`
+export function destinationKeys(m: Mapping): string[] {
+  if (m.type === 'note') {
+    const count = m.grid > 0 && gridPadOf(m.input) ? m.grid * m.grid : 1
+    return Array.from({ length: count }, (_, i) => `note:${m.channel}:${Math.min(127, m.note + i)}`)
+  }
+  if (m.type === 'cc' || m.type === 'relative') return [`cc:${m.channel}:${m.cc}`]
+  return [`bend:${m.channel}`]
 }
 
 /** For every enabled mapping that shares a destination with another enabled one: the others. */
@@ -69,16 +72,23 @@ export function findConflicts(mappings: Mapping[]): Map<string, Mapping[]> {
   const byKey = new Map<string, Mapping[]>()
   for (const m of mappings) {
     if (!m.enabled) continue
-    const k = destinationKey(m)
-    const list = byKey.get(k)
-    if (list) list.push(m)
-    else byKey.set(k, [m])
+    for (const k of new Set(destinationKeys(m))) {
+      const list = byKey.get(k)
+      if (list) list.push(m)
+      else byKey.set(k, [m])
+    }
   }
-  const out = new Map<string, Mapping[]>()
+  const sets = new Map<string, Set<Mapping>>()
   for (const list of byKey.values()) {
     if (list.length < 2) continue
-    for (const m of list) out.set(m.id, list.filter((o) => o !== m))
+    for (const m of list) {
+      const others = sets.get(m.id) ?? new Set<Mapping>()
+      for (const o of list) if (o !== m) others.add(o)
+      sets.set(m.id, others)
+    }
   }
+  const out = new Map<string, Mapping[]>()
+  for (const [id, others] of sets) out.set(id, [...others])
   return out
 }
 

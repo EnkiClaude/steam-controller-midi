@@ -59,6 +59,17 @@ minimise or close it.
 | Triggers, stick X / Y, trackpad X / Y, trackpad pressure | CC, pitch bend, or a note fired at a threshold |
 | Tilt forward/back, tilt left/right, yaw, gyro speed | CC or pitch bend, optionally only while a button is held |
 
+Two extras for playing rather than just mapping:
+
+- **Trackpad drum grid:** set a trackpad's Click (or Touch) mapping to Note and
+  choose a 2 × 2, 3 × 3 or 4 × 4 pad grid. Each zone plays its own note, counting
+  up from the mapping's note, bottom-left first, so a 4 × 4 grid starting at C1
+  lines up with a Drum Rack.
+- **Relative (endless knob) mode:** any axis can send up / down steps instead of a
+  position. Swipe a trackpad to nudge a parameter from wherever it is, or push a
+  stick to turn it at a speed. After mapping it in Live, set that mapping's mode
+  to *Relative (2's Comp.)* in the bar at the bottom of Live's window.
+
 Each mapping has its own channel, output range, invert, deadzone, response curve
 and smoothing. Trackpad and gated mappings can hold their last value or snap
 back to rest when you let go. An input can have several mappings.

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { BUTTONS, GROUPS, INPUT_BY_ID, type AxisDef, type InputDef } from '../core/inputs'
-import { describeMapping, noteName, type Mapping, type MappingType } from '../core/mapping'
+import { describeMapping, gridPadOf, noteName, type Mapping, type MappingType } from '../core/mapping'
 import { runtime } from '../runtime'
 import { activeMappings, useApp } from '../store'
 import { CLUSTER_OF, findConflicts, mappedInputs } from './clusters'
@@ -103,7 +103,8 @@ const BUTTON_TYPES: { value: MappingType; label: string }[] = [
 ]
 const AXIS_TYPES: { value: MappingType; label: string }[] = [
   { value: 'cc', label: 'CC' },
-  { value: 'pitchbend', label: 'Pitch bend' },
+  { value: 'relative', label: 'Relative' },
+  { value: 'pitchbend', label: 'Bend' },
   { value: 'note', label: 'Note' },
 ]
 
@@ -118,7 +119,8 @@ function MappingCard({ m, def, index, others }: { m: Mapping; def: InputDef; ind
   const [responseOpen, setResponseOpen] = useState(false)
   const set = (patch: Partial<Mapping>) => update(m.id, patch)
   const isAxis = def.kind === 'axis'
-  const showRelease = isAxis && m.type !== 'note' && (Boolean((def as AxisDef).activeWhile) || m.gate !== null)
+  const canGrid = !isAxis && m.type === 'note' && gridPadOf(m.input) !== null
+  const showRelease = isAxis && m.type !== 'note' && m.type !== 'relative' && (Boolean((def as AxisDef).activeWhile) || m.gate !== null)
   const title = `Mapping ${index + 1}`
 
   return (
@@ -197,6 +199,47 @@ function MappingCard({ m, def, index, others }: { m: Mapping; def: InputDef; ind
             <Field label={isAxis ? 'Range high' : 'On value'}>
               <NumField label={isAxis ? 'Output range high' : 'Value when pressed'} value={m.max} min={0} max={127} onChange={(max) => set({ max })} />
             </Field>
+          </>
+        )}
+
+        {m.type === 'relative' && (
+          <>
+            <Field label="CC number">
+              <NumField label="CC number" value={m.cc} min={0} max={127} onChange={(cc) => set({ cc })} />
+            </Field>
+            <Field label="Speed">
+              <NumField label="Relative speed" value={Math.round(m.speed)} min={1} max={500} bigStep={10} onChange={(speed) => set({ speed })} />
+            </Field>
+            <p className="card-hint">
+              Sends up / down steps like an endless knob: {(def as AxisDef).activeWhile
+                ? `${Math.round(m.speed)} steps for a full swipe across the pad`
+                : `${Math.round(m.speed)} steps a second at full deflection`}
+              . After mapping it in Live, set the mapping's mode to Relative (2's Comp.) at the bottom of Live's window.
+            </p>
+          </>
+        )}
+
+        {canGrid && (
+          <>
+            <FieldGroup label="Pad grid" wide>
+              <Segmented
+                label="Trackpad note grid"
+                value={String(m.grid)}
+                options={[
+                  { value: '0', label: 'Off' },
+                  { value: '2', label: '2 × 2' },
+                  { value: '3', label: '3 × 3' },
+                  { value: '4', label: '4 × 4' },
+                ]}
+                onChange={(v) => set({ grid: Number(v) })}
+              />
+            </FieldGroup>
+            {m.grid > 0 && (
+              <p className="card-hint">
+                The pad is split into {m.grid * m.grid} zones playing {noteName(m.note)} to{' '}
+                {noteName(Math.min(127, m.note + m.grid * m.grid - 1))}, bottom-left first, like a Drum Rack.
+              </p>
+            )}
           </>
         )}
 

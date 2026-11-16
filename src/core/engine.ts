@@ -3,7 +3,7 @@
 // firing when the browser tab is in the background) and be unit-tested.
 
 import { INPUT_BY_ID, type AxisDef, type ControllerState } from './inputs'
-import type { Mapping } from './mapping'
+import { gridPadOf, gridZone, type Mapping } from './mapping'
 
 /** Raw MIDI bytes, e.g. [0x90, 60, 100]. */
 export type MidiMessage = number[]
@@ -32,6 +32,9 @@ interface Runtime {
   /** smoothed position 0-1, null until first sample */
   smoothed: number | null
   active: boolean
+  /** relative mode: fractional steps not yet sent, and the previous position */
+  acc: number
+  prevT: number | null
 }
 
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v)
@@ -88,6 +91,8 @@ export class Engine {
         last: -1,
         smoothed: null,
         active: false,
+        acc: 0,
+        prevT: null,
       })
     }
     for (const [id, rt] of this.runtimes) {
@@ -113,15 +118,30 @@ export class Engine {
     rt.on = false
   }
 
-  /** Feed one controller snapshot; returns the MIDI to send, in order. */
-  process(state: ControllerState, solo: string | null = null): MidiMessage[] {
+  private lastNow: number | null = null
+  /** seconds since the previous process() call */
+  private dt = 0
+
+  /**
+   * Feed one controller snapshot; returns the MIDI to send, in order.
+   * `nowMs` is only needed for relative mappings on rate-style axes; without
+   * it the controller's 250 Hz report rate is assumed.
+   */
+  process(state: ControllerState, solo: string | null = null, nowMs?: number): MidiMessage[] {
     const out: MidiMessage[] = []
+    if (nowMs === undefined) {
+      this.dt = 0.004
+    } else {
+      // A long gap (controller asleep, tab suspended) must not turn into a burst.
+      this.dt = this.lastNow === null ? 0 : Math.min(0.1, Math.max(0, (nowMs - this.lastNow) / 1000))
+      this.lastNow = nowMs
+    }
     for (const rt of this.order) {
       const m = rt.mapping
       const def = INPUT_BY_ID[m.input]
       const live = m.enabled && (solo === null || solo === m.id)
       if (def.kind === 'button') {
-        this.processButton(rt, state.buttons[m.input] === true, live, out)
+        this.processButton(rt, state, live, out)
       } else {
         this.processAxis(rt, def, state, live, out)
       }
@@ -129,14 +149,15 @@ export class Engine {
     return out
   }
 
-  private setOn(rt: Runtime, on: boolean, out: MidiMessage[]): void {
+  private setOn(rt: Runtime, on: boolean, out: MidiMessage[], noteOffset = 0): void {
     const m = rt.mapping
     if (on === rt.on) return
     rt.on = on
     if (m.type === 'note') {
       if (on) {
-        rt.heldNote = { ch: m.channel, note: m.note }
-        out.push(noteOn(m.channel, m.note, m.velocity))
+        const note = Math.min(127, m.note + noteOffset)
+        rt.heldNote = { ch: m.channel, note }
+        out.push(noteOn(m.channel, note, m.velocity))
       } else if (rt.heldNote) {
         out.push(noteOff(rt.heldNote.ch, rt.heldNote.note))
         rt.heldNote = null
@@ -146,8 +167,9 @@ export class Engine {
     }
   }
 
-  private processButton(rt: Runtime, pressed: boolean, live: boolean, out: MidiMessage[]): void {
+  private processButton(rt: Runtime, state: ControllerState, live: boolean, out: MidiMessage[]): void {
     const m = rt.mapping
+    const pressed = state.buttons[m.input] === true
     const was = rt.pressed
     rt.pressed = pressed
     if (!live) {
@@ -159,10 +181,15 @@ export class Engine {
       return
     }
     if (pressed === was) return
+    // Trackpad note grid: the zone under the finger at the moment of the
+    // press picks the note.
+    let offset = 0
+    const pad = pressed && m.type === 'note' && m.grid > 0 ? gridPadOf(m.input) : null
+    if (pad) offset = gridZone(state.axes[`${pad}_x`] ?? 0, state.axes[`${pad}_y`] ?? 0, m.grid)
     if (m.toggle) {
-      if (pressed) this.setOn(rt, !rt.on, out)
+      if (pressed) this.setOn(rt, !rt.on, out, offset)
     } else {
-      this.setOn(rt, pressed, out)
+      this.setOn(rt, pressed, out, offset)
     }
   }
 
@@ -177,7 +204,11 @@ export class Engine {
       if (rt.active) {
         rt.active = false
         rt.smoothed = null
-        if (m.type === 'note') {
+        rt.acc = 0
+        rt.prevT = null
+        if (m.type === 'relative') {
+          // an encoder has no position to hold or reset
+        } else if (m.type === 'note') {
           rt.pressed = false
           this.setOn(rt, false, out)
         } else if (m.release === 'reset' && live) {
@@ -208,6 +239,25 @@ export class Engine {
       const over = rt.pressed ? travel >= m.threshold * 0.85 : travel >= m.threshold
       rt.pressed = over
       this.setOn(rt, over, out)
+      return
+    }
+    if (m.type === 'relative') {
+      if (def.activeWhile) {
+        // Trackpad: steps follow finger travel, like turning a knob.
+        if (rt.prevT !== null) rt.acc += (t - rt.prevT) * m.speed
+        rt.prevT = t
+      } else {
+        // Stick / trigger / motion: deflection sets how fast it turns.
+        const v = def.polarity === 'bipolar' ? (t - 0.5) * 2 : t
+        rt.acc += v * m.speed * this.dt
+      }
+      const steps = Math.trunc(rt.acc)
+      if (steps !== 0) {
+        rt.acc -= steps
+        // Two's-complement relative CC: 1..63 = up, 127..65 = down.
+        const n = Math.max(-63, Math.min(63, steps))
+        out.push(controlChange(m.channel, m.cc, n > 0 ? n : 128 + n))
+      }
       return
     }
     if (rt.last === -1 && !def.activeWhile && m.gate === null) {
@@ -255,6 +305,10 @@ export function learnMessages(m: Mapping): { delayMs: number; message: MidiMessa
       { delayMs: 0, message: pitchBend(m.channel, 10000) },
       { delayMs: 40, message: pitchBend(m.channel, 8192) },
     ]
+  }
+  if (m.type === 'relative') {
+    // Two steps up then two back down, so the parameter ends where it started.
+    return [1, 1, 127, 127].map((v, i) => ({ delayMs: i * 40, message: controlChange(m.channel, m.cc, v) }))
   }
   const lo = Math.min(m.min, m.max)
   const hi = Math.max(m.min, m.max)
