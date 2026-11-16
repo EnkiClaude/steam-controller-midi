@@ -4,6 +4,8 @@ Turn every input on the 2026 Steam Controller into MIDI and play Ableton Live
 with it: buttons, bumpers, analog triggers, both thumbsticks, both pressure-sensitive
 trackpads, the four grip buttons, the capacitive touch sensors, and motion (tilt and gyro).
 
+![The app with a controller connected](docs/screenshot.png)
+
 It runs in the browser (Chrome or Edge on a desktop computer). Nothing to install
 except a virtual MIDI port, which Live needs in order to hear the app.
 

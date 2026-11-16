@@ -20,11 +20,25 @@ function mk(input: string, o: Partial<Mapping> = {}): Mapping {
   return createMapping(input, { id: `t${seq}`, deadzone: 0, smooth: 0, curve: 1, ...o })
 }
 
-function setup(...mappings: Mapping[]) {
+/** Engine with mappings set but no report processed yet. */
+function setupRaw(...mappings: Mapping[]) {
   const engine = new Engine()
   const initial = engine.setMappings(mappings)
   const state = emptyState()
   return { engine, state, initial }
+}
+
+/**
+ * Engine that has already seen one report with everything at rest, the way
+ * it is once a controller is connected. Always-on axes are silent on that
+ * first sample (see 'first sample of an always-on axis'), and so is
+ * everything else at rest.
+ */
+function setup(...mappings: Mapping[]) {
+  const s = setupRaw(...mappings)
+  const primed = s.engine.process(s.state)
+  expect(primed, 'nothing is sent for a controller at rest').toEqual([])
+  return s
 }
 
 /** process and return */
@@ -281,10 +295,10 @@ describe('solo', () => {
 describe('axis → CC', () => {
   it('unipolar: 0 → min, 1 → max, linear in between', () => {
     const { engine, state } = setup(mk('lt', { type: 'cc', cc: 11 }))
-    expect(step(engine, state, { a: { lt: 0 } })).toEqual([[CC, 11, 0]])
     expect(step(engine, state, { a: { lt: 1 } })).toEqual([[CC, 11, 127]])
     expect(step(engine, state, { a: { lt: 0.25 } })).toEqual([[CC, 11, 32]]) // 31.75
     expect(step(engine, state, { a: { lt: 0.75 } })).toEqual([[CC, 11, 95]]) // 95.25
+    expect(step(engine, state, { a: { lt: 0 } })).toEqual([[CC, 11, 0]])
   })
 
   it('bipolar: -1 → min, 0 → midpoint, +1 → max', () => {
@@ -314,21 +328,22 @@ describe('axis → CC', () => {
       expectValidMidi(out)
       for (const m of out) vals.push(m[2])
     }
-    expect(vals).toEqual(Array.from({ length: 128 }, (_, i) => i))
+    // 0 is where it already was at rest
+    expect(vals).toEqual(Array.from({ length: 127 }, (_, i) => i + 1))
   })
 
   it('custom range', () => {
     const { engine, state } = setup(mk('lt', { type: 'cc', cc: 11, min: 20, max: 100 }))
-    expect(step(engine, state, { a: { lt: 0 } })).toEqual([[CC, 11, 20]])
     expect(step(engine, state, { a: { lt: 0.5 } })).toEqual([[CC, 11, 60]])
     expect(step(engine, state, { a: { lt: 1 } })).toEqual([[CC, 11, 100]])
+    expect(step(engine, state, { a: { lt: 0 } })).toEqual([[CC, 11, 20]])
   })
 
   it('reversed range (min > max)', () => {
     const { engine, state } = setup(mk('lt', { type: 'cc', cc: 11, min: 100, max: 20 }))
-    expect(step(engine, state, { a: { lt: 0 } })).toEqual([[CC, 11, 100]])
     expect(step(engine, state, { a: { lt: 0.5 } })).toEqual([[CC, 11, 60]])
     expect(step(engine, state, { a: { lt: 1 } })).toEqual([[CC, 11, 20]])
+    expect(step(engine, state, { a: { lt: 0 } })).toEqual([[CC, 11, 100]])
   })
 
   it('reversed range on a bipolar axis keeps the midpoint at rest', () => {
@@ -341,10 +356,8 @@ describe('axis → CC', () => {
 
   it('invert (unipolar and bipolar)', () => {
     const { engine, state } = setup(mk('lt', { type: 'cc', cc: 1, invert: true }), mk('lstick_x', { type: 'cc', cc: 2, invert: true }))
-    expect(step(engine, state, { a: { lt: 0, lstick_x: -1 } })).toEqual([
-      [CC, 1, 127],
-      [CC, 2, 127],
-    ])
+    // the trigger is already at its (inverted) rest value of 127
+    expect(step(engine, state, { a: { lt: 0, lstick_x: -1 } })).toEqual([[CC, 2, 127]])
     expect(step(engine, state, { a: { lt: 1, lstick_x: 1 } })).toEqual([
       [CC, 1, 0],
       [CC, 2, 0],
@@ -357,7 +370,6 @@ describe('axis → CC', () => {
 
   it('deadzone, bipolar: rests at the midpoint, then rescales to reach both ends', () => {
     const { engine, state } = setup(mk('lstick_x', { type: 'cc', cc: 3, deadzone: 0.2 }))
-    expect(step(engine, state, { a: { lstick_x: 0 } })).toEqual([[CC, 3, 64]])
     expect(step(engine, state, { a: { lstick_x: 0.19 } })).toEqual([])
     expect(step(engine, state, { a: { lstick_x: -0.19 } })).toEqual([])
     expect(step(engine, state, { a: { lstick_x: 0.2 } })).toEqual([])
@@ -365,19 +377,22 @@ describe('axis → CC', () => {
     expect(step(engine, state, { a: { lstick_x: -0.6 } })).toEqual([[CC, 3, 32]])
     expect(step(engine, state, { a: { lstick_x: 1 } })).toEqual([[CC, 3, 127]])
     expect(step(engine, state, { a: { lstick_x: -1 } })).toEqual([[CC, 3, 0]])
+    expect(step(engine, state, { a: { lstick_x: -0.1 } })).toEqual([[CC, 3, 64]])
+    expect(step(engine, state, { a: { lstick_x: 0.1 } })).toEqual([])
   })
 
   it('deadzone, bipolar with a custom range: rests at the middle of that range', () => {
     const { engine, state } = setup(mk('lstick_x', { type: 'cc', cc: 3, deadzone: 0.2, min: 40, max: 80 }))
+    expect(step(engine, state, { a: { lstick_x: 1 } })).toEqual([[CC, 3, 80]])
     expect(step(engine, state, { a: { lstick_x: 0.1 } })).toEqual([[CC, 3, 60]])
   })
 
   it('deadzone, unipolar: rests at min, then rescales to reach max', () => {
     const { engine, state } = setup(mk('lt', { type: 'cc', cc: 4, deadzone: 0.2, min: 10, max: 110 }))
-    expect(step(engine, state, { a: { lt: 0 } })).toEqual([[CC, 4, 10]])
     expect(step(engine, state, { a: { lt: 0.15 } })).toEqual([])
     expect(step(engine, state, { a: { lt: 0.6 } })).toEqual([[CC, 4, 60]])
     expect(step(engine, state, { a: { lt: 1 } })).toEqual([[CC, 4, 110]])
+    expect(step(engine, state, { a: { lt: 0.15 } })).toEqual([[CC, 4, 10]])
   })
 
   it('the default stick deadzone leaves no jump at its edge', () => {
@@ -413,7 +428,6 @@ describe('axis → CC', () => {
 
   it('smoothing: moves part of the way each step, monotonically, and converges on the target', () => {
     const { engine, state } = setup(mk('lt', { type: 'cc', cc: 9, smooth: 0.5 }))
-    expect(step(engine, state, { a: { lt: 0 } })).toEqual([[CC, 9, 0]])
     const first = step(engine, state, { a: { lt: 1 } })
     expect(first).toEqual([[CC, 9, 64]]) // halfway
     const vals = [64]
@@ -447,6 +461,91 @@ describe('axis → CC', () => {
   })
 })
 
+describe('first sample of an always-on axis', () => {
+  it('is silent at rest for CC and pitch bend, unipolar and bipolar', () => {
+    const { engine, state, initial } = setupRaw(
+      mk('lt', { type: 'cc', cc: 1 }),
+      mk('lstick_x', { type: 'cc', cc: 2 }),
+      mk('rstick_x', { type: 'pitchbend' }),
+      mk('lpad_pressure', { type: 'cc', cc: 3 }),
+      mk('tilt_roll', { type: 'cc', cc: 4 }),
+    )
+    expect(initial).toEqual([])
+    expect(engine.process(state)).toEqual([])
+    expect(engine.process(state)).toEqual([])
+  })
+
+  it('is silent even when the axis is away from rest', () => {
+    const { engine, state } = setupRaw(mk('lt', { type: 'cc', cc: 1 }), mk('rstick_x', { type: 'pitchbend' }))
+    expect(step(engine, state, { a: { lt: 0.8, rstick_x: -0.6 } })).toEqual([])
+    expect(step(engine, state)).toEqual([])
+  })
+
+  it('a later change sends, and so does returning to the first value after leaving it', () => {
+    const { engine, state } = setupRaw(mk('lt', { type: 'cc', cc: 1 }))
+    expect(step(engine, state, { a: { lt: 0.5 } })).toEqual([])
+    expect(step(engine, state, { a: { lt: 1 } })).toEqual([[CC, 1, 127]])
+    expect(step(engine, state, { a: { lt: 0.5 } })).toEqual([[CC, 1, 64]])
+  })
+
+  it('a change smaller than one step after the silent sample still sends nothing', () => {
+    const { engine, state } = setupRaw(mk('lt', { type: 'cc', cc: 1 }))
+    step(engine, state, { a: { lt: 0.5 } })
+    expect(step(engine, state, { a: { lt: 0.5005 } })).toEqual([])
+  })
+
+  it('with smoothing, the silent sample is the starting point of the glide', () => {
+    const { engine, state } = setupRaw(mk('lt', { type: 'cc', cc: 1, smooth: 0.5 }))
+    expect(step(engine, state, { a: { lt: 0 } })).toEqual([])
+    expect(step(engine, state, { a: { lt: 1 } })).toEqual([[CC, 1, 64]])
+  })
+
+  it('a trackpad axis still sends on first touch', () => {
+    const { engine, state } = setupRaw(mk('lpad_x', { type: 'cc', cc: 40 }), mk('rpad_y', { type: 'pitchbend' }))
+    expect(step(engine, state)).toEqual([])
+    expect(step(engine, state, { b: { lpad_touch: true, rpad_touch: true } })).toEqual([
+      [CC, 40, 64],
+      [BEND, 0x00, 0x40],
+    ])
+  })
+
+  it('a gated axis still sends when its gate first opens', () => {
+    const { engine, state } = setupRaw(mk('lt', { type: 'cc', cc: 50, gate: 'l4' }), mk('tilt_roll', { type: 'pitchbend', gate: 'l4' }))
+    expect(step(engine, state)).toEqual([])
+    expect(step(engine, state, { b: { l4: true } })).toEqual([
+      [CC, 50, 0],
+      [BEND, 0x00, 0x40],
+    ])
+  })
+
+  it('editing a mapping re-primes it silently', () => {
+    const m = mk('lt', { type: 'cc', cc: 1 })
+    const other = mk('rt', { type: 'cc', cc: 2 })
+    const { engine, state } = setup(m, other)
+    expect(step(engine, state, { a: { lt: 0.5, rt: 0.5 } })).toHaveLength(2)
+    expect(engine.setMappings([{ ...m, cc: 9, max: 100 }, other])).toEqual([])
+    expect(step(engine, state)).toEqual([]) // new CC 9 says nothing about where it is
+    expect(step(engine, state)).toEqual([])
+    expect(step(engine, state, { a: { lt: 1 } })).toEqual([[CC, 9, 100]])
+    // the untouched mapping was not reset: same value, still deduped
+    expect(step(engine, state, { a: { rt: 0.5 } })).toEqual([])
+  })
+
+  it('enabling a disabled mapping primes silently', () => {
+    const m = mk('lstick_x', { type: 'pitchbend', enabled: false })
+    const { engine, state } = setup(m)
+    step(engine, state, { a: { lstick_x: 0.5 } })
+    expect(engine.setMappings([{ ...m, enabled: true }])).toEqual([])
+    expect(step(engine, state)).toEqual([])
+    expect(bend14(step(engine, state, { a: { lstick_x: 0 } })[0])).toBe(8192)
+  })
+
+  it('axis → note is not delayed by priming: it fires on the very first sample', () => {
+    const { engine, state } = setupRaw(mk('lt', { type: 'note', note: 44 }))
+    expect(step(engine, state, { a: { lt: 1 } })).toEqual([[NOTE_ON, 44, 100]])
+  })
+})
+
 describe('axis → pitch bend', () => {
   it('pitchBend() encodes 14 bits LSB first', () => {
     expect(pitchBend(1, 8192)).toEqual([0xe0, 0x00, 0x40])
@@ -458,8 +557,8 @@ describe('axis → pitch bend', () => {
   for (const deadzone of [0, 0.08, 0.5]) {
     it(`centre is exactly 8192 at rest, extremes are 0 and 16383 (deadzone ${deadzone})`, () => {
       const { engine, state } = setup(mk('lstick_x', { type: 'pitchbend', deadzone }))
-      expect(step(engine, state, { a: { lstick_x: 0 } })).toEqual([[BEND, 0x00, 0x40]])
       expect(step(engine, state, { a: { lstick_x: 1 } })).toEqual([[BEND, 0x7f, 0x7f]])
+      expect(step(engine, state, { a: { lstick_x: 0 } })).toEqual([[BEND, 0x00, 0x40]])
       expect(step(engine, state, { a: { lstick_x: -1 } })).toEqual([[BEND, 0x00, 0x00]])
       const back = step(engine, state, { a: { lstick_x: 0 } })
       expect(back).toHaveLength(1)
@@ -469,9 +568,9 @@ describe('axis → pitch bend', () => {
 
   it('centre stays 8192 with invert and with a curve', () => {
     const { engine, state } = setup(mk('lstick_x', { type: 'pitchbend', invert: true, curve: 2.5 }))
-    expect(bend14(step(engine, state)[0])).toBe(8192)
     expect(bend14(step(engine, state, { a: { lstick_x: 1 } })[0])).toBe(0)
     expect(bend14(step(engine, state, { a: { lstick_x: -1 } })[0])).toBe(16383)
+    expect(bend14(step(engine, state, { a: { lstick_x: 0 } })[0])).toBe(8192)
   })
 
   it('is symmetric and monotonic', () => {
@@ -556,19 +655,64 @@ describe('axis → note', () => {
   })
 
   it('invert: fires when the axis is released past the threshold', () => {
-    const { engine, state } = setup(mk('lt', { type: 'note', note: 50, threshold: 0.5, invert: true }))
+    // (an inverted trigger note sounds at rest by design, so start with it pulled)
+    const { engine, state } = setupRaw(mk('lt', { type: 'note', note: 50, threshold: 0.5, invert: true }))
     expect(step(engine, state, { a: { lt: 1 } })).toEqual([])
     expect(step(engine, state, { a: { lt: 0.2 } })).toEqual([[NOTE_ON, 50, 100]])
     expect(step(engine, state, { a: { lt: 1 } })).toEqual([[NOTE_OFF, 50, 0]])
   })
 
-  // A bipolar axis is shaped to 0-1 with rest at 0.5, and the default
-  // threshold is 0.5, so a stick mapped to a note with default settings
-  // sounds its note AT REST and only releases when pushed left/down past
-  // ~0.425. The intended semantics for bipolar axes are not specified
-  // (distance from rest? positive half only?), so this is reported rather
-  // than changed.
-  it.todo('bipolar axis → note with the default threshold should not sound at rest')
+  it('bipolar axis: off at rest with the default threshold', () => {
+    const m = createMapping('lstick_x', { id: 'bn', type: 'note', note: 51 })
+    expect(m.threshold).toBe(0.5)
+    const { engine, state } = setupRaw(m)
+    expect(step(engine, state)).toEqual([])
+    expect(step(engine, state, { a: { lstick_x: 0.05 } })).toEqual([])
+    expect(step(engine, state, { a: { lstick_x: -0.05 } })).toEqual([])
+    expect(engine.releaseAll()).toEqual([])
+  })
+
+  for (const dir of [1, -1]) {
+    it(`bipolar axis: fires at the ${dir > 0 ? 'positive' : 'negative'} extreme and releases back at rest`, () => {
+      const { engine, state } = setup(mk('lstick_y', { type: 'note', note: 51, velocity: 88, threshold: 0.5 }))
+      expect(step(engine, state, { a: { lstick_y: dir * 0.49 } })).toEqual([])
+      expect(step(engine, state, { a: { lstick_y: dir * 0.5 } })).toEqual([[NOTE_ON, 51, 88]])
+      expect(step(engine, state, { a: { lstick_y: dir } })).toEqual([])
+      expect(step(engine, state, { a: { lstick_y: 0 } })).toEqual([[NOTE_OFF, 51, 0]])
+      expect(step(engine, state)).toEqual([])
+    })
+
+    it(`bipolar axis: hysteresis on the ${dir > 0 ? 'positive' : 'negative'} side`, () => {
+      const { engine, state } = setup(mk('lstick_y', { type: 'note', note: 51, threshold: 0.5 }))
+      expect(step(engine, state, { a: { lstick_y: dir * 0.52 } })).toHaveLength(1)
+      const out: MidiMessage[] = []
+      for (const v of [0.49, 0.51, 0.48, 0.5, 0.47, 0.53, 0.46]) out.push(...step(engine, state, { a: { lstick_y: dir * v } }))
+      expect(out).toEqual([])
+      expect(step(engine, state, { a: { lstick_y: dir * 0.3 } })).toEqual([[NOTE_OFF, 51, 0]])
+      expect(step(engine, state, { a: { lstick_y: dir * 0.47 } })).toEqual([])
+      expect(step(engine, state, { a: { lstick_y: dir * 0.5 } })).toEqual([[NOTE_ON, 51, 100]])
+    })
+  }
+
+  it('bipolar axis: flicking straight from one extreme to the other keeps the note held (one note per mapping)', () => {
+    const { engine, state } = setup(mk('lstick_x', { type: 'note', note: 51 }))
+    expect(step(engine, state, { a: { lstick_x: 1 } })).toHaveLength(1)
+    expect(step(engine, state, { a: { lstick_x: -1 } })).toEqual([])
+    expect(step(engine, state, { a: { lstick_x: 0 } })).toEqual([[NOTE_OFF, 51, 0]])
+  })
+
+  it('bipolar axis: the threshold is measured after the deadzone', () => {
+    const { engine, state } = setup(mk('lstick_x', { type: 'note', note: 51, deadzone: 0.2, threshold: 0.5 }))
+    expect(step(engine, state, { a: { lstick_x: 0.55 } })).toEqual([]) // (0.55-0.2)/0.8 = 0.44
+    expect(step(engine, state, { a: { lstick_x: 0.6 } })).toHaveLength(1) // exactly half of live travel
+  })
+
+  it('a stick mapped to a note in the default-style setup never sounds while untouched', () => {
+    const { engine, state } = setupRaw(...AXES.map((a) => createMapping(a.id, { type: 'note' })))
+    state.buttons.lpad_touch = true
+    state.buttons.rpad_touch = true
+    expect(engine.process(state)).toEqual([])
+  })
 })
 
 describe('trackpad axes (only meaningful while touched)', () => {
@@ -913,7 +1057,8 @@ describe('formatMessage', () => {
   })
   it('round-trips what the engine produces', () => {
     const { engine, state } = setup(mk('lstick_x', { type: 'pitchbend', channel: 7 }))
-    expect(formatMessage(step(engine, state)[0])).toEqual({ kind: 'Bend', channel: 7, detail: '0' })
+    expect(formatMessage(step(engine, state, { a: { lstick_x: 1 } })[0])).toEqual({ kind: 'Bend', channel: 7, detail: '8191' })
+    expect(formatMessage(step(engine, state, { a: { lstick_x: 0 } })[0])).toEqual({ kind: 'Bend', channel: 7, detail: '0' })
   })
   it('anything else is shown as hex without throwing', () => {
     const f = formatMessage([0xc1, 5])

@@ -412,7 +412,7 @@ describe('yaw integration', () => {
   it('0x42: first report does not integrate (no previous timestamp)', () => {
     const { state, ctx } = fresh()
     parseReport(0x42, std({ sGyroZ: GZ, 'imu.timestamp': 123456 }), state, ctx)
-    expect(state.axes.turn).toBe(0)
+    expect(Math.abs(state.axes.turn)).toBe(0)
   })
 
   it('0x42: timestamp is uint32 microseconds', () => {
@@ -420,7 +420,8 @@ describe('yaw integration', () => {
     parseReport(0x42, std({ sGyroZ: GZ, 'imu.timestamp': 1_000_000 }), state, ctx)
     parseReport(0x42, std({ sGyroZ: GZ, 'imu.timestamp': 1_004_000 }), state, ctx)
     expect(ctx.yaw).toBeCloseTo(dps * 0.004, 9)
-    expect(state.axes.turn).toBeCloseTo((dps * 0.004) / 90, 9)
+    // raw gyro Z is positive anticlockwise; the turn axis is positive to the right
+    expect(state.axes.turn).toBeCloseTo(-(dps * 0.004) / 90, 9)
     parseReport(0x42, std({ sGyroZ: -GZ, 'imu.timestamp': 1_012_000 }), state, ctx)
     expect(ctx.yaw).toBeCloseTo(dps * 0.004 - dps * 0.008, 9)
   })
@@ -504,22 +505,69 @@ describe('yaw integration', () => {
     const { state, ctx } = fresh()
     parseReport(0x42, std({ sGyroX: 9000, sGyroY: 9000, 'imu.timestamp': 0 }), state, ctx)
     parseReport(0x42, std({ sGyroX: 9000, sGyroY: 9000, 'imu.timestamp': 4000 }), state, ctx)
-    expect(state.axes.turn).toBe(0)
+    expect(Math.abs(state.axes.turn)).toBe(0)
   })
 
-  it('turn saturates at ±1 (90°) and recenter() zeroes it', () => {
-    const { state, ctx } = fresh()
-    let t = 0
-    parseReport(0x42, std({ sGyroZ: 32767, 'imu.timestamp': t }), state, ctx)
-    for (let i = 0; i < 100; i++) {
+  for (const [raw, expected, name] of [
+    [-32768, 1, 'right (clockwise from above, negative raw gyro Z)'],
+    [32767, -1, 'left (anticlockwise, positive raw gyro Z)'],
+  ] as const) {
+    it(`turning ${name} saturates at ${expected} (90°) and recenter() zeroes it`, () => {
+      const { state, ctx } = fresh()
+      let t = 0
+      parseReport(0x42, std({ sGyroZ: raw, 'imu.timestamp': t }), state, ctx)
+      for (let i = 0; i < 100; i++) {
+        t += 4000
+        parseReport(0x42, std({ sGyroZ: raw, 'imu.timestamp': t }), state, ctx)
+      }
+      expect(state.axes.turn).toBe(expected)
+      recenter(ctx)
       t += 4000
-      parseReport(0x42, std({ sGyroZ: 32767, 'imu.timestamp': t }), state, ctx)
+      parseReport(0x42, std({ sGyroZ: 0, 'imu.timestamp': t }), state, ctx)
+      expect(Math.abs(state.axes.turn)).toBe(0)
+    })
+  }
+
+  it('a 45° turn to the right reads +0.5', () => {
+    const { state, ctx } = fresh()
+    // -1638 LSB ≈ -99.98 deg/s for 0.45 s
+    let t = 0
+    parseReport(0x42, std({ sGyroZ: -GZ, 'imu.timestamp': t }), state, ctx)
+    for (let i = 0; i < 100; i++) {
+      t += 4500
+      parseReport(0x42, std({ sGyroZ: -GZ, 'imu.timestamp': t }), state, ctx)
     }
-    expect(state.axes.turn).toBe(1)
-    recenter(ctx)
-    t += 4000
-    parseReport(0x42, std({ sGyroZ: 0, 'imu.timestamp': t }), state, ctx)
-    expect(state.axes.turn).toBe(0)
+    expect(state.axes.turn).toBeCloseTo((dps * 0.45) / 90, 9)
+    expect(state.axes.turn).toBeCloseTo(0.5, 3)
+  })
+
+  it('gyro noise at or below 1.5 deg/s is not integrated (no drift at rest)', () => {
+    // 24 LSB = 1.465 deg/s, 25 LSB = 1.526 deg/s
+    for (const raw of [24, -24, 10, -1]) {
+      const { state, ctx } = fresh()
+      let t = 0
+      for (let i = 0; i < 2500; i++) {
+        parseReport(0x42, std({ sGyroZ: raw, 'imu.timestamp': t }), state, ctx)
+        t += 4000
+      }
+      expect(ctx.yaw, `raw ${raw}`).toBe(0)
+      expect(Math.abs(state.axes.turn)).toBe(0)
+    }
+  })
+
+  it('rotation just above the deadband is integrated at its full rate', () => {
+    for (const raw of [25, -25]) {
+      const { state, ctx } = fresh()
+      parseReport(0x42, std({ sGyroZ: raw, 'imu.timestamp': 0 }), state, ctx)
+      parseReport(0x42, std({ sGyroZ: raw, 'imu.timestamp': 100_000 }), state, ctx)
+      expect(ctx.yaw).toBeCloseTo(raw * GYRO_DPS_PER_LSB * 0.1, 9)
+    }
+  })
+
+  it('the deadband does not affect the gyro_z speed axis', () => {
+    const { state, ctx } = fresh()
+    parseReport(0x42, std({ sGyroZ: 20 }), state, ctx)
+    expect(state.axes.gyro_z).toBeCloseTo((20 * GYRO_DPS_PER_LSB) / 360, 9)
   })
 })
 
@@ -533,20 +581,35 @@ describe('tilt from the accelerometer', () => {
     it(`0x${id.toString(16)}: flat on a table is pitch 0, roll 0`, () => {
       const { state, ctx } = fresh()
       parseReport(id, mk({ ...flat, sGyroX: 500, 'imu.timestamp': 0x1234 }), state, ctx)
-      expect(state.axes.tilt_pitch).toBe(0)
-      expect(state.axes.tilt_roll).toBe(0)
+      expect(Math.abs(state.axes.tilt_pitch)).toBe(0)
+      expect(Math.abs(state.axes.tilt_roll)).toBe(0)
     })
 
-    it(`0x${id.toString(16)}: accel X drives roll only, accel Y drives pitch only`, () => {
-      let { state, ctx } = fresh()
+    // SDL's axis mapping (X→X, Z→Y(up), -Y→Z(toward player)) means raw X
+    // points right, raw Y away from the player, raw Z up out of the face. An
+    // accelerometer at rest reads +1 g along "up", so with the right side
+    // tilted DOWN raw accel X is negative, and with the far edge tilted down
+    // raw accel Y is negative. Both must read positive, like stick right/up.
+    it(`0x${id.toString(16)}: accel X drives roll only; right side down 45° is +0.5`, () => {
       const c45 = Math.round(ONE_G * Math.SQRT1_2)
+      let { state, ctx } = fresh()
+      parseReport(id, mk({ sAccelX: -c45, sAccelZ: c45 }), state, ctx)
+      expect(state.axes.tilt_roll).toBeCloseTo(0.5, 3)
+      expect(Math.abs(state.axes.tilt_pitch)).toBe(0)
+      ;({ state, ctx } = fresh())
       parseReport(id, mk({ sAccelX: c45, sAccelZ: c45 }), state, ctx)
-      expect(Math.abs(state.axes.tilt_roll)).toBeCloseTo(0.5, 3) // 45° of ±90°
-      expect(state.axes.tilt_pitch).toBe(0)
+      expect(state.axes.tilt_roll).toBeCloseTo(-0.5, 3)
+    })
+
+    it(`0x${id.toString(16)}: accel Y drives pitch only; tilted forward 45° is +0.5`, () => {
+      const c45 = Math.round(ONE_G * Math.SQRT1_2)
+      let { state, ctx } = fresh()
+      parseReport(id, mk({ sAccelY: -c45, sAccelZ: c45 }), state, ctx)
+      expect(state.axes.tilt_pitch).toBeCloseTo(0.5, 3)
+      expect(Math.abs(state.axes.tilt_roll)).toBe(0)
       ;({ state, ctx } = fresh())
       parseReport(id, mk({ sAccelY: c45, sAccelZ: c45 }), state, ctx)
-      expect(Math.abs(state.axes.tilt_pitch)).toBeCloseTo(0.5, 3)
-      expect(state.axes.tilt_roll).toBe(0)
+      expect(state.axes.tilt_pitch).toBeCloseTo(-0.5, 3)
     })
   }
 
@@ -563,8 +626,8 @@ describe('tilt from the accelerometer', () => {
 
   it('on edge (90°) is full deflection', () => {
     const { state, ctx } = fresh()
-    parseReport(0x42, std({ sAccelX: ONE_G, sAccelZ: 0 }), state, ctx)
-    expect(Math.abs(state.axes.tilt_roll)).toBe(1)
+    parseReport(0x42, std({ sAccelX: -ONE_G, sAccelZ: 0 }), state, ctx)
+    expect(state.axes.tilt_roll).toBe(1)
   })
 
   it('converges on a new pose (low-pass filter) and stays in range', () => {
@@ -618,18 +681,9 @@ describe('tilt from the accelerometer', () => {
     parseReport(0x42, std({ buttons: 1 }), state, ctx)
     parseReport(0x42, std({ buttons: 0 }), state, ctx)
     for (const a of ['tilt_pitch', 'tilt_roll', 'turn', 'gyro_x', 'gyro_y', 'gyro_z']) {
-      expect(state.axes[a], a).toBe(0)
+      expect(Math.abs(state.axes[a]), a).toBe(0)
     }
   })
-
-  // SDL's axis mapping (gyro/accel X→X, Z→Y(up), -Y→Z(toward player)) means
-  // raw X points right, raw Y away from the player, raw Z up out of the face.
-  // An accelerometer at rest reads +1 g along "up", so with the right side
-  // tilted DOWN raw accel X is NEGATIVE, and a clockwise (rightward) turn is
-  // NEGATIVE gyro Z. The code therefore reports tilt-right, turn-right and
-  // tilt-forward as negative, the opposite of stick-right/stick-up = positive.
-  // Whether that is intended is a design call; left alone and reported.
-  it.todo('sign convention: tilting/turning right (and tilting forward) should probably be positive like the sticks')
 })
 
 describe('every axis stays normalised', () => {

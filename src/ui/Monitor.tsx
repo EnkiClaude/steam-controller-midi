@@ -9,6 +9,8 @@ import { onFrame } from './live'
 const MAX_ROWS = 80
 /** entries at or below this seq were cleared by the user */
 let clearedSeq = 0
+/** bumped on every clear so an open list knows to empty itself */
+let clearCount = 0
 
 function span(cls: string, text: string): HTMLSpanElement {
   const s = document.createElement('span')
@@ -71,8 +73,10 @@ export function Monitor() {
     if (!el) return
     el.replaceChildren()
     let shown = clearedSeq
-    return onFrame(() => {
-      if (shown < clearedSeq) {
+    let clears = clearCount
+    const render = () => {
+      if (clears !== clearCount) {
+        clears = clearCount
         shown = clearedSeq
         el.replaceChildren()
       }
@@ -83,7 +87,9 @@ export function Monitor() {
       for (let i = fresh.length - 1; i >= 0; i--) frag.append(buildRow(fresh[i]))
       el.prepend(frag)
       while (el.childElementCount > MAX_ROWS) el.lastElementChild?.remove()
-    })
+    }
+    render()
+    return onFrame(render)
   }, [open])
 
   return (
@@ -100,6 +106,7 @@ export function Monitor() {
           className="btn btn-small btn-ghost"
           onClick={() => {
             clearedSeq = runtime.monitorSeq
+            clearCount++
           }}
         >
           Clear

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Engine } from './engine'
 import { AXES, BUTTONS, emptyState, INPUT_BY_ID, INPUTS } from './inputs'
-import { createMapping, defaultPreset, describeMapping, noteName, sanitizeMapping, sanitizePreset, type Mapping } from './mapping'
+import { createMapping, defaultPreset, describeMapping, freeCc, noteName, sanitizeMapping, sanitizePreset, type Mapping } from './mapping'
 
 function expectValidMapping(m: Mapping) {
   expect(typeof m.id === 'string' && m.id.length > 0).toBe(true)
@@ -80,6 +80,28 @@ describe('defaultPreset', () => {
 
   it('every value is in MIDI range and every mapping is well-formed', () => {
     for (const m of preset.mappings) expectValidMapping(m)
+  })
+
+  // Controller numbers the MIDI 1.0 spec leaves undefined in the ranges the
+  // preset draws from. Everything else is either a defined controller, an LSB
+  // for controllers 0-31 (32-63), or a channel mode message (120-127).
+  const isFree = (cc: number) => (cc >= 20 && cc <= 31) || (cc >= 102 && cc <= 119)
+
+  it('every default CC is an undefined controller: none in 32-63, none defined, no channel-mode', () => {
+    const ccs = preset.mappings.filter((m) => m.type === 'cc').map((m) => m.cc)
+    expect(ccs).toHaveLength(AXES.length)
+    for (const cc of ccs) {
+      expect(cc < 32 || cc > 63, `CC ${cc} is an LSB controller`).toBe(true)
+      expect(cc, `CC ${cc} is a channel mode message`).toBeLessThan(120)
+      expect(isFree(cc), `CC ${cc}`).toBe(true)
+    }
+    expect(new Set(ccs).size).toBe(ccs.length)
+  })
+
+  it('freeCc walks 20-31 then 102-119 without repeats, for more axes than exist', () => {
+    const seq = Array.from({ length: 30 }, (_, i) => freeCc(i))
+    expect(seq).toEqual([...Array.from({ length: 12 }, (_, i) => 20 + i), ...Array.from({ length: 18 }, (_, i) => 102 + i)])
+    expect(AXES.length).toBeLessThanOrEqual(30)
   })
 
   it('buttons are notes and axes are CCs', () => {
