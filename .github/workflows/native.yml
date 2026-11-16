@@ -1,0 +1,110 @@
+# Builds the standalone app and the VST3 / AU plugins for macOS and Windows.
+# Download the results from the run's "Artifacts" section, or push a tag such
+# as v0.1.0 to attach them to a GitHub release.
+name: Native builds
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+    paths: ['native/**', 'src/**', 'scripts/**', 'package*.json', '.github/workflows/native.yml']
+  pull_request:
+    paths: ['native/**', 'src/**', 'scripts/**', 'package*.json', '.github/workflows/native.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build the interface and test fixtures
+        run: npm run build:native && npm run fixtures
+      - name: Configure
+        run: cmake -S native -B native/build -G Xcode
+      - name: Build
+        run: cmake --build native/build --config Release
+      - name: Engine parity test
+        run: ctest --test-dir native/build -C Release --output-on-failure
+      - name: Package
+        run: |
+          set -euo pipefail
+          OUT="$PWD/package/Steam Controller MIDI"
+          mkdir -p "$OUT"
+          A=native/build/SteamControllerMIDI_artefacts/Release
+          AU=native/build/SteamControllerMIDI_AU_artefacts/Release
+          cp -R "$A/Standalone/Steam Controller MIDI.app" "$OUT/"
+          cp -R "$A/VST3/Steam Controller MIDI.vst3" "$OUT/"
+          cp -R "$AU/AU/Steam Controller MIDI.component" "$OUT/"
+          # Not notarised: an ad-hoc signature is the most we can do without a developer account.
+          codesign --force --deep --sign - "$OUT/Steam Controller MIDI.app"
+          codesign --force --deep --sign - "$OUT/Steam Controller MIDI.vst3"
+          codesign --force --deep --sign - "$OUT/Steam Controller MIDI.component"
+          cp native/INSTALL-macOS.txt "$OUT/Install.txt"
+          ditto -c -k --keepParent "$OUT" "SteamControllerMIDI-macOS.zip"
+      - name: Validate the Audio Unit
+        continue-on-error: true
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R "package/Steam Controller MIDI/Steam Controller MIDI.component" ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          auval -v aumi Scm2 Scmi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SteamControllerMIDI-macOS
+          path: SteamControllerMIDI-macOS.zip
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" --generate-notes 2>/dev/null || true
+          gh release upload "${{ github.ref_name }}" SteamControllerMIDI-macOS.zip --clobber
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build the interface and test fixtures
+        run: npm run build:native; if ($LASTEXITCODE -eq 0) { npm run fixtures }
+      - name: Fetch the WebView2 SDK
+        run: nuget install Microsoft.Web.WebView2 -Version 1.0.3485.44 -OutputDirectory native/webview2
+      - name: Configure
+        run: cmake -S native -B native/build -DJUCE_WEBVIEW2_PACKAGE_LOCATION="${{ github.workspace }}/native/webview2"
+      - name: Build
+        run: cmake --build native/build --config Release
+      - name: Engine parity test
+        run: ctest --test-dir native/build -C Release --output-on-failure
+      - name: Package
+        shell: pwsh
+        run: |
+          $out = "package/Steam Controller MIDI"
+          New-Item -ItemType Directory -Force $out | Out-Null
+          $a = "native/build/SteamControllerMIDI_artefacts/Release"
+          Copy-Item "$a/Standalone/Steam Controller MIDI.exe" $out
+          Copy-Item "$a/VST3/Steam Controller MIDI.vst3" $out -Recurse
+          Copy-Item native/INSTALL-Windows.txt "$out/Install.txt"
+          Compress-Archive -Path $out -DestinationPath SteamControllerMIDI-Windows.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SteamControllerMIDI-Windows
+          path: SteamControllerMIDI-Windows.zip
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release create "${{ github.ref_name }}" --generate-notes 2>/dev/null || true
+          gh release upload "${{ github.ref_name }}" SteamControllerMIDI-Windows.zip --clobber

@@ -26,9 +26,11 @@ export default function App() {
   const mappingCount = useApp((s) => s.presets[s.active].mappings.length)
 
   // First run with no MIDI port to send to: show how to make one.
+  const inPlugin = useApp((s) => s.host === 'vst3' || s.host === 'au')
   useEffect(() => {
-    if (needsPort && !setupSeen()) setSetupOpen(true)
-  }, [needsPort])
+    // As a plugin, the routing inside the host is the part that needs explaining.
+    if ((needsPort || inPlugin) && !setupSeen()) setSetupOpen(true)
+  }, [needsPort, inPlugin])
 
   const closeSetup = useCallback(() => {
     setSetupOpen(false)

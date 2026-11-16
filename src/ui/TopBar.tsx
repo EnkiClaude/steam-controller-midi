@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { sanitizePreset } from '../core/mapping'
+import { NativeRuntime } from '../nativeRuntime'
 import { runtime } from '../runtime'
 import { activeMappings, useApp } from '../store'
 import { Icon } from './controls'
@@ -23,6 +24,8 @@ function Battery({ level, charging }: { level: number; charging: boolean }) {
 function ConnectionChip() {
   const hid = useApp((s) => s.hid)
   const gamepad = useApp((s) => s.gamepad)
+  // Inside the app / plugin the controller is found automatically.
+  const native = useApp((s) => s.host !== 'web')
 
   if (hid.phase === 'connected') {
     return (
@@ -31,18 +34,28 @@ function ConnectionChip() {
         <span className="chip-name" title={hid.deviceName}>{hid.deviceName || 'Steam Controller'}</span>
         {hid.transport && <span className="chip-meta">{TRANSPORT[hid.transport]}</span>}
         {hid.battery !== null && <Battery level={hid.battery} charging={hid.charging} />}
-        <button type="button" className="icon-btn" aria-label="Disconnect controller" title="Disconnect controller" onClick={() => void runtime.disconnect()}>
-          {Icon.close}
-        </button>
+        {!native && (
+          <button type="button" className="icon-btn" aria-label="Disconnect controller" title="Disconnect controller" onClick={() => void runtime.disconnect()}>
+            {Icon.close}
+          </button>
+        )}
+      </div>
+    )
+  }
+  if (native && hid.phase === 'disconnected') {
+    return (
+      <div className="chip" title="Plug in the controller or its wireless puck. It connects by itself.">
+        <span className="dot dot-wait" />
+        <span className="chip-name">Looking for a controller…</span>
       </div>
     )
   }
   if (hid.phase === 'connecting' || hid.phase === 'waiting') {
     return (
-      <div className="chip">
+      <div className="chip" title={native ? 'The controller is plugged in but not sending yet. Press a button to wake it.' : undefined}>
         <span className="dot dot-wait" />
-        <span className="chip-name">Waiting for controller…</span>
-        {hid.phase === 'waiting' && (
+        <span className="chip-name">{native ? 'Controller found, waiting for input…' : 'Waiting for controller…'}</span>
+        {hid.phase === 'waiting' && !native && (
           <button type="button" className="icon-btn" aria-label="Cancel and disconnect" title="Cancel and disconnect" onClick={() => void runtime.disconnect()}>
             {Icon.close}
           </button>
@@ -76,8 +89,12 @@ function MidiOut({ onSetup }: { onSetup(): void }) {
   const midi = useApp((s) => s.midi)
   const setMidiOut = useApp((s) => s.setMidiOut)
 
+  const host = useApp((s) => s.host)
+
   let body
-  if (!midi.supported) {
+  if (host !== 'web' && host !== 'standalone') {
+    body = <span className="midi-note" title="MIDI leaves through the plugin's output, into the host">To the host, on this track</span>
+  } else if (!midi.supported) {
     body = <span className="midi-note">Web MIDI is not available in this browser</span>
   } else if (midi.phase === 'denied') {
     body = (
@@ -157,6 +174,12 @@ function PresetMenu() {
 
   const exportPreset = () => {
     const data = { app: 'steam-controller-midi', version: 1, name: current.name, mappings: activeMappings(app()) }
+    if (runtime instanceof NativeRuntime) {
+      const safe = current.name.replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-') || 'preset'
+      runtime.exportFile(`${safe}.json`, JSON.stringify(data, null, 2))
+      setOpen(false)
+      return
+    }
     const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }))
     const a = document.createElement('a')
     a.href = url
@@ -168,16 +191,21 @@ function PresetMenu() {
     setOpen(false)
   }
 
-  const importPreset = async (f: File) => {
+  const importText = (fileName: string, text: string) => {
     try {
-      const preset = sanitizePreset(JSON.parse(await f.text()))
+      const preset = sanitizePreset(JSON.parse(text))
       if (!preset) throw new Error('not a preset')
       app().addPreset(preset)
       setError('')
       setOpen(false)
     } catch {
-      setError(`"${f.name}" is not a Steam Controller MIDI preset file.`)
+      setError(`"${fileName}" is not a Steam Controller MIDI preset file.`)
     }
+  }
+  const importPreset = async (f: File) => importText(f.name, await f.text())
+  const chooseImport = () => {
+    if (runtime instanceof NativeRuntime) runtime.importFile(importText)
+    else file.current?.click()
   }
 
   const commitRename = () => {
@@ -267,7 +295,7 @@ function PresetMenu() {
               <button type="button" role="menuitem" className="menu-item" onClick={() => { setName(current.name); setMode('rename') }}>Rename…</button>
               <div className="menu-sep" />
               <button type="button" role="menuitem" className="menu-item" onClick={exportPreset}>Export to file</button>
-              <button type="button" role="menuitem" className="menu-item" onClick={() => file.current?.click()}>Import from file…</button>
+              <button type="button" role="menuitem" className="menu-item" onClick={chooseImport}>Import from file…</button>
               <div className="menu-sep" />
               <button type="button" role="menuitem" className="menu-item" onClick={() => setMode('reset')}>Reset to defaults…</button>
               <button type="button" role="menuitem" className="menu-item menu-item-danger" onClick={() => setMode('delete')}>Delete…</button>

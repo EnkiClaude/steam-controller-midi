@@ -12,6 +12,11 @@ import {
   type Preset,
 } from './core/mapping'
 
+/** Where the interface is running: a browser tab, or inside the native app / plugin. */
+export type HostFormat = 'web' | 'standalone' | 'vst3' | 'au' | 'plugin'
+
+const inNative = typeof globalThis !== 'undefined' && (globalThis as { __JUCE__?: unknown }).__JUCE__ !== undefined
+
 export type HidPhase = 'disconnected' | 'connecting' | 'waiting' | 'connected'
 
 export interface HidStatus {
@@ -54,6 +59,8 @@ interface Persisted {
 const STORAGE_KEY = 'steam-controller-midi/v1'
 
 function load(): Persisted {
+  // Inside the app / plugin the native side owns the settings and sends them over.
+  if (inNative) return { presets: [defaultPreset()], active: 0, midiOutId: null }
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (raw) {
@@ -73,6 +80,7 @@ function load(): Persisted {
 }
 
 function save(s: Persisted): void {
+  if (inNative) return
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(s))
   } catch {
@@ -81,6 +89,7 @@ function save(s: Persisted): void {
 }
 
 export interface AppState extends Persisted {
+  host: HostFormat
   selectedInput: string | null
   /** Learn mode: live controller output is muted so only "Send" buttons reach the DAW */
   learn: boolean
@@ -90,6 +99,9 @@ export interface AppState extends Persisted {
   midi: MidiStatus
   gamepad: GamepadStatus
 
+  setHost(host: HostFormat): void
+  /** Replace every preset at once (settings arriving from the native side). */
+  replaceConfig(presets: Preset[], active: number): void
   selectInput(id: string | null): void
   setLearn(on: boolean): void
   setSolo(id: string | null): void
@@ -120,11 +132,12 @@ export const useApp = create<AppState>((set, get) => {
   }
   return {
     ...initial,
+    host: inNative ? 'plugin' : 'web',
     selectedInput: null,
     learn: false,
     solo: null,
     hid: {
-      supported: typeof navigator !== 'undefined' && 'hid' in navigator,
+      supported: inNative || (typeof navigator !== 'undefined' && 'hid' in navigator),
       phase: 'disconnected',
       deviceName: '',
       transport: '',
@@ -134,13 +147,15 @@ export const useApp = create<AppState>((set, get) => {
       error: '',
     },
     midi: {
-      supported: typeof navigator !== 'undefined' && 'requestMIDIAccess' in navigator,
+      supported: inNative || (typeof navigator !== 'undefined' && 'requestMIDIAccess' in navigator),
       phase: 'idle',
       outputs: [],
       selectedId: initial.midiOutId,
     },
     gamepad: { connected: false, name: '' },
 
+    setHost: (host) => set({ host }),
+    replaceConfig: (presets, active) => set({ presets, active, solo: null }),
     selectInput: (id) => set({ selectedInput: id }),
     setLearn: (on) => set({ learn: on }),
     setSolo: (id) => set({ solo: id }),

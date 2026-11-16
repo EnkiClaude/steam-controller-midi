@@ -14,7 +14,46 @@ except a virtual MIDI port, which Live needs in order to hear the app.
 > controller. If yours isn't recognised, open **Setup → Diagnostics**, press
 > **Copy diagnostics**, and open an issue with the result.
 
-## Run it
+## Three ways to run it
+
+| | What it is | Best for |
+| --- | --- | --- |
+| **Standalone app** | A desktop app. On macOS it creates its own MIDI port, "Steam Controller MIDI". | Mapping Live's knobs and buttons (MIDI Map mode) and playing instruments. Keeps working with its window hidden. |
+| **VST3 / AU plugin** | The same thing inside your DAW, saved with the project. | Playing instruments on a track. |
+| **Web app** | Runs in Chrome or Edge, nothing to install. | Trying it out. |
+
+Two things about Ableton Live worth knowing before you choose:
+
+- Live's MIDI Map mode only listens to MIDI *ports*, never to plugins. To map
+  Live's own parameters, use the standalone app (or the web app).
+- Live does not accept MIDI from Audio Units. In Live use the VST3; the AU is a
+  MIDI effect for hosts such as Logic.
+
+### Get the app and plugins
+
+Builds for macOS (universal) and Windows are produced by the **Native builds**
+workflow: open the repository's Actions tab, pick the latest run and download
+the zip under *Artifacts*. Each zip has an `Install.txt`. The builds are not
+signed by Apple or Microsoft, so the first launch needs one extra step, which
+`Install.txt` describes.
+
+To build them yourself (CMake 3.22+, a C++17 compiler, Node 22):
+
+```bash
+npm install
+npm run build:native
+cmake -S native -B native/build -DCMAKE_BUILD_TYPE=Release
+cmake --build native/build --config Release
+```
+
+On Windows, install the WebView2 SDK first and pass its folder with
+`-DJUCE_WEBVIEW2_PACKAGE_LOCATION=...` (see `.github/workflows/native.yml`).
+
+> **Status of the native builds:** the Linux build of the standalone app and
+> VST3 has been run and its interface exercised; the macOS and Windows builds
+> and the Audio Unit have not been run by anyone yet.
+
+## Run the web app
 
 ```bash
 npm install
@@ -102,3 +141,7 @@ npm run build   # type-check and build into dist/
   running in a background tab.
 - `src/store.ts` — presets and connection status.
 - `src/ui/` — the interface.
+- `native/` — the standalone app and plugins (JUCE). `Source/Core.cpp` is a C++
+  port of `src/core/`; `npm run fixtures` plus `native/Tests/parity.cpp` check
+  that both produce identical MIDI. The interface is the same web UI, embedded
+  and shown in a WebView, talking to the native side through `src/nativeRuntime.ts`.

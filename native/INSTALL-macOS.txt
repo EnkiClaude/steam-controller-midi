@@ -1,0 +1,35 @@
+Steam Controller MIDI for macOS
+===============================
+
+What's here
+  Steam Controller MIDI.app         the standalone app
+  Steam Controller MIDI.vst3        VST3 plugin (use this one in Ableton Live)
+  Steam Controller MIDI.component   Audio Unit MIDI effect (for Logic and other AU hosts)
+
+Install
+  App:   drag it to Applications.
+  VST3:  copy to  ~/Library/Audio/Plug-Ins/VST3/
+  AU:    copy to  ~/Library/Audio/Plug-Ins/Components/
+  (In Finder: Go > Go to Folder..., paste the path.)
+
+First launch
+  These builds are not notarised by Apple, so macOS will refuse to open them
+  until you clear the download flag. Open Terminal and run:
+
+    xattr -cr "/Applications/Steam Controller MIDI.app"
+    xattr -cr ~/Library/Audio/Plug-Ins/VST3/"Steam Controller MIDI.vst3"
+    xattr -cr ~/Library/Audio/Plug-Ins/Components/"Steam Controller MIDI.component"
+
+Use
+  Quit Steam first: while it runs it turns the controller into a mouse and keyboard.
+
+  Standalone app: it creates a MIDI port called "Steam Controller MIDI". In Live,
+  Settings > Link, Tempo & MIDI, switch on Track and Remote for that input.
+  This is the one to use for mapping Live's own knobs and buttons (Cmd+M).
+
+  VST3 in Live: put it on a MIDI track. On your instrument's track set
+  "MIDI From" to that track and choose "Steam Controller MIDI" in the menu
+  below it, with Monitor set to In. Live cannot use plugin MIDI for Cmd+M
+  mapping; use the standalone app for that.
+
+  Live does not accept MIDI from Audio Units, so the AU is for other hosts.

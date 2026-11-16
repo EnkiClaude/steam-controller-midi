@@ -8,7 +8,9 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "test": "vitest run",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "fixtures": "rolldown scripts/gen-fixtures.ts --file node_modules/.tmp/gen-fixtures.mjs --platform node && node node_modules/.tmp/gen-fixtures.mjs",
+    "build:native": "tsc -b && vite build && rolldown scripts/gen-default-config.ts --file node_modules/.tmp/gen-default-config.mjs --platform node && node node_modules/.tmp/gen-default-config.mjs"
   },
   "dependencies": {
     "react": "^19.3.1",

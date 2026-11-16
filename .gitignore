@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# native build outputs and generated inputs
+native/build
+native/Resources/default-config.json
+native/Tests/fixtures.txt

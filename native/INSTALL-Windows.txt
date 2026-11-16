@@ -1,0 +1,31 @@
+Steam Controller MIDI for Windows
+=================================
+
+What's here
+  Steam Controller MIDI.exe     the standalone app
+  Steam Controller MIDI.vst3    VST3 plugin
+
+Install
+  App:   keep the .exe anywhere you like.
+  VST3:  copy the "Steam Controller MIDI.vst3" folder to
+         C:\Program Files\Common Files\VST3\
+
+  The interface needs Microsoft's WebView2 runtime, which Windows 11 and
+  up-to-date Windows 10 already have.
+
+  Windows may show a SmartScreen warning because the app is not signed:
+  choose "More info" then "Run anyway".
+
+Use
+  Quit Steam first: while it runs it turns the controller into a mouse and keyboard.
+
+  Standalone app: Windows cannot create MIDI ports, so install loopMIDI
+  (tobias-erichsen.de/software/loopmidi.html), add a port, and choose it in
+  the app's "MIDI out" menu. In Live, Settings > Link, Tempo & MIDI, switch
+  on Track and Remote for that input. This is the one to use for mapping
+  Live's own knobs and buttons (Ctrl+M).
+
+  VST3 in Live: put it on a MIDI track. On your instrument's track set
+  "MIDI From" to that track and choose "Steam Controller MIDI" in the menu
+  below it, with Monitor set to In. Live cannot use plugin MIDI for Ctrl+M
+  mapping; use the standalone app for that.

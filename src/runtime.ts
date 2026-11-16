@@ -20,6 +20,7 @@ import {
   parseReport,
   recenter,
 } from './core/triton'
+import { NativeRuntime, isNative } from './nativeRuntime'
 import { activeMappings, useApp } from './store'
 
 export interface MonitorEntry {
@@ -522,4 +523,5 @@ function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
-export const runtime = new Runtime()
+/** The browser pipeline on the web; a relay to native code inside the app / plugin. */
+export const runtime: Runtime | NativeRuntime = isNative ? new NativeRuntime() : new Runtime()

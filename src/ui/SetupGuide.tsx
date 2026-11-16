@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { runtime } from '../runtime'
+import { useApp } from '../store'
 import { Icon } from './controls'
 import { onFrame } from './live'
 
@@ -80,6 +81,7 @@ function Diagnostics() {
 export function SetupGuide({ onClose }: { onClose(): void }) {
   const closeBtn = useRef<HTMLButtonElement>(null)
   const panel = useRef<HTMLDivElement>(null)
+  const host = useApp((s) => s.host)
 
   useEffect(() => {
     const before = document.activeElement as HTMLElement | null
@@ -123,6 +125,60 @@ export function SetupGuide({ onClose }: { onClose(): void }) {
           </button>
         </header>
         <div className="dialog-body">
+          {host === 'vst3' || host === 'au' || host === 'plugin' ? (
+            <ol className="steps">
+              <li>
+                <h3>Put the plugin on a MIDI track</h3>
+                <p>
+                  {host === 'au'
+                    ? 'In Logic, add it as a MIDI FX on an instrument track: it plays that instrument directly.'
+                    : 'In Live, drop Steam Controller MIDI onto an empty MIDI track. It makes no sound itself; it turns the controller into MIDI.'}
+                </p>
+              </li>
+              {host !== 'au' && (
+                <li>
+                  <h3>Send its MIDI to your instrument</h3>
+                  <p>
+                    On the track with your instrument, set MIDI From to the plugin's track and, in the menu below it,
+                    choose Steam Controller MIDI. Set that track's Monitor to In.
+                  </p>
+                </li>
+              )}
+              <li>
+                <h3>Mapping Live's own knobs and buttons</h3>
+                <p>
+                  Live's MIDI Map mode (Cmd/Ctrl+M) only listens to MIDI ports, not to plugins. To map Live's controls,
+                  run the standalone Steam Controller MIDI app instead: it appears in Live as its own MIDI port.
+                </p>
+              </li>
+            </ol>
+          ) : host === 'standalone' ? (
+            <ol className="steps">
+              <li>
+                <h3>Pick where the MIDI goes</h3>
+                <p>
+                  <b>macOS:</b> nothing to set up. This app creates its own port, "Steam Controller MIDI", already
+                  chosen in the MIDI out menu.
+                </p>
+                <p>
+                  <b>Windows:</b> install loopMIDI, add a port, then choose it in the MIDI out menu at the top of this
+                  window.
+                </p>
+              </li>
+              <li>
+                <h3>Turn it on in Live</h3>
+                <p>
+                  In Live open Settings → Link, Tempo &amp; MIDI. For that port's Input, enable Track and Remote.
+                </p>
+              </li>
+              <li>
+                <h3>Map controls</h3>
+                <p>
+                  Switch on Learn here, press Cmd/Ctrl+M in Live, click a parameter, then press Send on a mapping.
+                </p>
+              </li>
+            </ol>
+          ) : (
           <ol className="steps">
             <li>
               <h3>Create a virtual MIDI port</h3>
@@ -146,11 +202,13 @@ export function SetupGuide({ onClose }: { onClose(): void }) {
               </p>
             </li>
           </ol>
+          )}
           <div className="tips">
             <span className="section-label">Tips</span>
             <ul>
               <li>Quit Steam while you use this app. Steam's desktop layout turns the controller into a mouse and keyboard.</li>
-              <li>Keep this browser window open. It can sit behind Live, but not minimised or closed.</li>
+              {host === 'web' && <li>Keep this browser window open. It can sit behind Live, but not minimised or closed.</li>}
+              {host === 'standalone' && <li>Keep this app running while you play. Its window can be hidden or minimised.</li>}
               <li>Wired USB or the wireless puck are the most reliable connections.</li>
             </ul>
           </div>
