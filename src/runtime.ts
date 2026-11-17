@@ -5,6 +5,7 @@
 // Chrome throttles those. HID `inputreport` events and Worker messages keep
 // arriving, so those drive everything.
 
+import { Debouncer } from './core/debounce'
 import { Engine, learnMessages, type MidiMessage } from './core/engine'
 import { INPUT_BY_ID, emptyState, type ControllerState } from './core/inputs'
 import type { Mapping } from './core/mapping'
@@ -37,6 +38,8 @@ export interface RawReport {
   hex: string
 }
 
+/** how long the followed source must be silent before another may take over */
+const SOURCE_TIMEOUT_MS = 500
 const MONITOR_SIZE = 200
 const CAPTURE_SIZE = 500
 
@@ -58,6 +61,9 @@ class Runtime {
   private engine = new Engine()
   private ctx = createContext()
   private devices: HIDDevice[] = []
+  /** the interface whose state reports we are following */
+  private source: HIDDevice | null = null
+  private debouncer = new Debouncer()
   private lastMaintenance = 0
   private lastStateReport = 0
   private midiAccess: MIDIAccess | null = null
@@ -306,6 +312,8 @@ class Runtime {
 
   private onAllGone(): void {
     this.ctx = createContext()
+    this.source = null
+    this.debouncer.reset()
     Object.assign(this.state, emptyState())
     this.simulated.clear()
     this.stateVersion++
@@ -325,6 +333,15 @@ class Runtime {
     this.reportCount++
     this.record(now, e.reportId, e.data)
 
+    // A controller that is both plugged in and connected wirelessly sends two
+    // streams. Mixing them makes buttons flicker (one stream is always a few
+    // milliseconds behind), so follow one source until it goes quiet.
+    const isState = e.reportId === 0x42 || e.reportId === 0x45 || e.reportId === 0x47
+    if (isState) {
+      if (this.source !== e.device && now - this.lastStateReport < SOURCE_TIMEOUT_MS) return
+      this.source = e.device
+    }
+
     let result
     try {
       result = parseReport(e.reportId, e.data, this.state, this.ctx)
@@ -335,6 +352,7 @@ class Runtime {
     if (result.type === 'state') {
       this.lastStateReport = now
       if (app.hid.phase !== 'connected') app.setHid({ phase: 'connected' })
+      this.debouncer.apply(this.state, now)
       for (const id of this.simulated) if (id in this.state.buttons) this.state.buttons[id] = true
       this.tick()
     } else if (result.type === 'battery') {

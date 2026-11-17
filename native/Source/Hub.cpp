@@ -60,6 +60,7 @@ void Hub::goneLocked()
 {
     state = ControllerState();
     ctx = TritonContext();
+    debouncer.reset();
     simButtons.fill (false);
     simAxes.fill (false);
     simCount = 0;
@@ -188,6 +189,7 @@ void Hub::scan()
     }
     devices = std::move (found);
     activeDevice = -1;
+    source = -1;
     const auto pid = devices.front().pid;
     status = {};
     status.phase = Phase::waiting;
@@ -203,6 +205,7 @@ void Hub::closeAll()
             hid_close (d.handle);
     devices.clear();
     activeDevice = -1;
+    source = -1;
 }
 
 void Hub::maintain (double nowMs)
@@ -218,11 +221,21 @@ void Hub::maintain (double nowMs)
     status.settingsOk = ok ? 1 : 0;
 }
 
-void Hub::handleReport (const uint8_t* data, int size, double nowMs)
+void Hub::handleReport (int device, const uint8_t* data, int size, double nowMs)
 {
     const juce::ScopedLock sl (lock);
     ++reportCount;
     lastReports[data[0]] = juce::String::toHexString (data + 1, size - 1, 0);
+
+    // A controller that is both plugged in and connected wirelessly sends two
+    // streams. Mixing them makes buttons flicker (one is always a few
+    // milliseconds behind), so follow one source until it goes quiet.
+    if (data[0] == 0x42 || data[0] == 0x45 || data[0] == 0x47)
+    {
+        if (source != device && nowMs - lastStateReport < 500)
+            return;
+        source = device;
+    }
 
     const auto r = parseReport (data[0], data + 1, (size_t) (size - 1), state, ctx);
     switch (r.type)
@@ -230,6 +243,7 @@ void Hub::handleReport (const uint8_t* data, int size, double nowMs)
         case ParsedReport::state:
             lastStateReport = nowMs;
             status.phase = Phase::connected;
+            debouncer.apply (state, nowMs);
             if (simCount > 0)
                 for (size_t i = 0; i < (size_t) kNumButtons; ++i)
                     if (simButtons[i])
@@ -296,9 +310,9 @@ void Hub::run()
                 any = true;
                 if (r >= 2)
                 {
-                    handleReport (buf, r, juce::Time::getMillisecondCounterHiRes());
-                    if (buf[0] == 0x42 || buf[0] == 0x45 || buf[0] == 0x47)
-                        activeDevice = (int) i;
+                    handleReport ((int) i, buf, r, juce::Time::getMillisecondCounterHiRes());
+                    // Block on whichever interface we are following.
+                    activeDevice = source;
                 }
             }
             if (failed) break;
@@ -333,7 +347,7 @@ void Hub::run()
             {
                 const int r = hid_read_timeout (devices[(size_t) activeDevice].handle, buf, sizeof (buf), 4);
                 if (r >= 2)
-                    handleReport (buf, r, juce::Time::getMillisecondCounterHiRes());
+                    handleReport (activeDevice, buf, r, juce::Time::getMillisecondCounterHiRes());
             }
             else
             {

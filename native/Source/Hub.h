@@ -67,7 +67,7 @@ private:
     void run() override;
     void scan();
     void closeAll();
-    void handleReport (const uint8_t* data, int size, double nowMs);
+    void handleReport (int device, const uint8_t* data, int size, double nowMs);
     void maintain (double nowMs);
     void tickClients (double nowMs);
     void goneLocked();
@@ -84,6 +84,9 @@ private:
     std::vector<Client*> clients;
     ControllerState state;
     TritonContext ctx;
+    Debouncer debouncer;
+    /** index of the interface whose state reports we are following, or -1 */
+    int source = -1;
     Status status;
     std::array<bool, kNumButtons> simButtons {};
     std::array<bool, kNumAxes> simAxes {};

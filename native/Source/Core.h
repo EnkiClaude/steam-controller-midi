@@ -102,6 +102,51 @@ struct ParsedReport
 ParsedReport parseReport (uint8_t reportId, const uint8_t* data, size_t size,
                           ControllerState& state, TritonContext& ctx);
 
+/**
+ * Button debounce: an edge is passed on immediately, then that button ignores
+ * further changes for a short window, so contact chatter can't double a note.
+ * Mirrors src/core/debounce.ts.
+ */
+class Debouncer
+{
+public:
+    static constexpr double kWindowMs = 20.0;
+
+    void apply (ControllerState& state, double nowMs)
+    {
+        for (size_t i = 0; i < (size_t) kNumButtons; ++i)
+        {
+            const bool raw = state.buttons[i];
+            if (raw != stable[i] && nowMs - changedAt[i] >= kWindowMs)
+            {
+                stable[i] = raw;
+                changedAt[i] = nowMs;
+            }
+            else
+            {
+                state.buttons[i] = stable[i];
+            }
+        }
+    }
+
+    void reset()
+    {
+        stable.fill (false);
+        changedAt.fill (-1e18);
+    }
+
+private:
+    std::array<bool, kNumButtons> stable {};
+    std::array<double, kNumButtons> changedAt = makeNever();
+
+    static std::array<double, kNumButtons> makeNever()
+    {
+        std::array<double, kNumButtons> a {};
+        a.fill (-1e18);
+        return a;
+    }
+};
+
 constexpr int kMaintenanceIntervalMs = 2000;
 constexpr uint8_t kFeatureReportId = 1;
 
