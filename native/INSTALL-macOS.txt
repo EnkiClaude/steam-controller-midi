@@ -20,6 +20,16 @@ First launch
     xattr -cr ~/Library/Audio/Plug-Ins/VST3/"Steam Controller MIDI.vst3"
     xattr -cr ~/Library/Audio/Plug-Ins/Components/"Steam Controller MIDI.component"
 
+If Live doesn't list the plugin
+  macOS's "Open Anyway" button doesn't work for plugins; use the xattr
+  commands above. Live also remembers a plugin that failed to load once, so
+  after clearing the flag:
+    1. Live > Settings > Plug-Ins: hold Option and click Rescan.
+    2. Still missing? Quit Live, move the .vst3 out of the VST3 folder,
+       open Live and Rescan, quit, move it back, run its xattr line again,
+       then open Live and Rescan once more.
+  Repeat the xattr step after every new download.
+
 Use
   Quit Steam first: while it runs it turns the controller into a mouse and keyboard.
 
