@@ -249,12 +249,22 @@ function Drawing() {
 function MotionTile({ id, name, children }: { id: string; name: string; children: ReactNode }) {
   const mapped = useContext(Mapped)
   const selected = useApp((s) => s.selectedInput === id)
+  // Gated motion only sends while a button is held: say which, on the tile.
+  const gates = useApp((s) =>
+    [
+      ...new Set(
+        activeMappings(s)
+          .filter((m) => m.input === id && m.enabled && m.gate)
+          .map((m) => INPUT_BY_ID[m.gate as string]?.short ?? m.gate),
+      ),
+    ].join(', '),
+  )
   return (
     <button
       type="button"
       className="tile"
-      aria-label={INPUT_BY_ID[id].label}
-      title={INPUT_BY_ID[id].label}
+      aria-label={gates ? `${INPUT_BY_ID[id].label}, only while ${gates} is held` : INPUT_BY_ID[id].label}
+      title={gates ? `${INPUT_BY_ID[id].label}: only sends while ${gates} is held` : INPUT_BY_ID[id].label}
       aria-pressed={selected}
       data-mapped={mapped.has(id) ? '' : undefined}
       onClick={() => useApp.getState().selectInput(id)}
@@ -264,6 +274,7 @@ function MotionTile({ id, name, children }: { id: string; name: string; children
         <span className="tile-name">{name}</span>
         <span className="tile-value mono" data-live="value" data-id={id}>+0.00</span>
       </span>
+      {gates && <span className="tile-gate" aria-hidden="true">while {gates}</span>}
     </button>
   )
 }

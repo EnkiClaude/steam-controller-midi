@@ -36,14 +36,21 @@ export function quantizeNote(n: number, root: number, scale: number): number {
   return n
 }
 
-/** The note `degrees` scale steps above `base` (which should already be in the scale); capped at 127. */
+/**
+ * The note `degrees` scale steps above `base` (which should already be in the
+ * scale). Past the top of the MIDI range it stays on the highest scale note.
+ */
 export function stepScale(base: number, degrees: number, root: number, scale: number): number {
   const steps = SCALES[scale]?.steps ?? SCALES[0].steps
   let n = base
+  let last = base
   for (let left = degrees; left > 0; ) {
     n++
-    if (n > 127) return 127
-    if (inScale(n, root, steps)) left--
+    if (n > 127) return last
+    if (inScale(n, root, steps)) {
+      last = n
+      left--
+    }
   }
   return n
 }

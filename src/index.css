@@ -1090,6 +1090,27 @@ button {
     background 0.12s;
 }
 
+.tile {
+  position: relative;
+}
+
+.tile-gate {
+  position: absolute;
+  top: -7px;
+  right: 6px;
+  max-width: calc(100% - 12px);
+  padding: 0 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--panel);
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--warn);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .tile:hover {
   background: var(--raised);
 }
@@ -2060,7 +2081,8 @@ button {
 }
 
 .mon-kind-cc,
-.mon-kind-bend {
+.mon-kind-bend,
+.mon-kind-pressure {
   color: var(--mapped);
 }
 
@@ -2314,4 +2336,137 @@ button {
   font-size: 12px;
   line-height: 1.45;
   color: var(--text-3, var(--muted, #8b93a3));
+}
+
+/* ------------------------------------------------------- mapping card extras */
+
+.field-span2 {
+  grid-column: span 2;
+}
+
+.num-played {
+  color: var(--warn);
+}
+
+.range-pair {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.range-pair .num {
+  flex: 1;
+  min-width: 0;
+}
+
+.range-to {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.switch-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.switch-text {
+  color: var(--text-2);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-gate {
+  margin: 8px 10px 0;
+  padding: 6px 10px;
+  border-radius: var(--r-m);
+  background: var(--raised);
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------ preset menu */
+
+.menu-label {
+  display: block;
+  padding: 4px 8px 3px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-3);
+}
+
+.menu-item-indent {
+  padding-left: 28px;
+}
+
+/* --------------------------------------------------------------- settings */
+
+.set-section + .set-section {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.set-title {
+  margin-bottom: 10px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.set-scope {
+  margin-left: 4px;
+  font-weight: 400;
+  color: var(--text-3);
+}
+
+.set-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.settings .field-wide {
+  grid-template-columns: 128px minmax(0, 1fr);
+}
+
+.set-pair {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.set-pair > .slider-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.set-root {
+  width: 76px;
+  flex: none;
+}
+
+.set-num {
+  display: block;
+  max-width: 170px;
+}
+
+.set-readout {
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.set-help {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-3);
+}
+
+.select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }

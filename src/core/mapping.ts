@@ -304,10 +304,6 @@ function drumKit(): Preset {
     n('l5', 42, { repeat: 8 }),
     n('r4', 46),
     n('r5', 49),
-    n('a', 36, { velocity: 110 }),
-    n('b', 38, { velocity: 110 }),
-    n('x', 42, { velocity: 100 }),
-    n('y', 46, { velocity: 100 }),
   ])
 }
 
@@ -317,8 +313,9 @@ function synthPerformance(): Preset {
     'Synth performance',
     [
       // Each finger is its own MPE voice: slide to bend, move up/down for timbre, press for pressure.
-      createMapping('rpad_touch', { type: 'note', note: 60, grid: 4, mpe: true, bend: 2, velFrom: 'rpad_pressure', velMin: 50, velocity: 120 }),
-      createMapping('lpad_touch', { type: 'note', note: 48, grid: 4, mpe: true, bend: 2, velFrom: 'lpad_pressure', velMin: 50, velocity: 120 }),
+      // (Velocity is fixed: at the instant a finger lands the pad reads almost no pressure.)
+      createMapping('rpad_touch', { type: 'note', note: 60, grid: 4, mpe: true, bend: 2, velocity: 100 }),
+      createMapping('lpad_touch', { type: 'note', note: 48, grid: 4, mpe: true, bend: 2, velocity: 100 }),
       // Tilt forward/back for the mod wheel; a 30° tilt covers the full range.
       createMapping('tilt_pitch', { type: 'cc', cc: 1, gain: 3, smooth: 0.6 }),
       createMapping('tilt_roll', { type: 'cc', cc: 21, gain: 3, smooth: 0.6 }),

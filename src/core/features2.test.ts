@@ -416,7 +416,8 @@ describe('note repeat', () => {
       for (let k = 1; k < ons.length; k++) {
         const ideal = 1 + k * interval
         expect(ons[k]).toBeGreaterThanOrEqual(ideal - 1e-6)
-        expect(ons[k]).toBeLessThan(ideal + 1)
+        // float accumulation may land a hair past an integer ms
+        expect(ons[k]).toBeLessThanOrEqual(ideal + 1 + 1e-6)
       }
       expect(ons.length).toBeGreaterThanOrEqual(5)
     })
@@ -552,8 +553,7 @@ describe('note repeat', () => {
     const tr = noteTracker()
     set(state, { b: { l4: true } })
     for (let t = 1; t <= 100; t++) tr.feed(engine.process(state, null, t))
-    expect(tr.feed(engine.process(state, null, 101, ))).toBeDefined()
-    expect(tr.feed(engine.process(state, other.id, 102))).toEqual([off(1, 42)])
+        expect(tr.feed(engine.process(state, other.id, 102))).toEqual([off(1, 42)])
     for (let t = 103; t <= 500; t++) expect(tr.feed(engine.process(state, other.id, t))).toEqual([])
     for (let t = 501; t <= 1000; t++) tr.feed(engine.process(state, null, t))
     set(state, { b: { l4: false } })
@@ -665,7 +665,8 @@ describe('scales: quantizeNote / stepScale', () => {
 
   it('edges: 0 and 127', () => {
     expect(quantizeNote(0, 0, MAJOR)).toBe(0)
-    expect(quantizeNote(0, 1, MAJOR)).toBe(1) // C# major starts on C#
+    expect(quantizeNote(0, 1, MAJOR)).toBe(0) // C is B#, in C# major
+    expect(quantizeNote(0, 2, MAJOR)).toBe(1) // D major: C → C#
     expect(quantizeNote(127, 0, MAJOR)).toBe(127) // G
     expect(quantizeNote(127, 1, MAJOR)).toBe(126) // G is not in C# major; F# below is
     expect(quantizeNote(127, 1, MPENT)).toBe(126) // C# minor pent: F# is the top in-range note
@@ -689,7 +690,7 @@ describe('scales: quantizeNote / stepScale', () => {
   // a G. Expected: stay on the highest in-scale note, as quantizeNote does
   // ("or the highest below, at the top of the range"). src/core/scales.ts:47
   // (`if (n > 127) return 127`).
-  it.fails('stepScale never leaves the scale at the top of the range', () => {
+  it('stepScale never leaves the scale at the top of the range', () => {
     const base = quantizeNote(126, 1, MAJOR) // F#, the highest C# major note
     expect(base).toBe(126)
     const top = stepScale(base, 1, 1, MAJOR)

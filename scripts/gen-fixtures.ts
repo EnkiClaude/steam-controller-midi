@@ -6,8 +6,9 @@
 import { writeFileSync } from 'node:fs'
 import { Engine } from '../src/core/engine'
 import { AXES, BUTTONS, emptyState } from '../src/core/inputs'
-import { createMapping, type Mapping, type MappingType } from '../src/core/mapping'
-import { createContext, parseReport, recenter } from '../src/core/triton'
+import { REPEAT_RATES, VELOCITY_SOURCES, createMapping, type Mapping, type MappingType } from '../src/core/mapping'
+import { SCALES } from '../src/core/scales'
+import { buildRumbleReport, createContext, parseReport, recenter } from '../src/core/triton'
 
 // Small deterministic PRNG (mulberry32) so the fixture is reproducible.
 let seed = 0x5c0171
@@ -22,28 +23,31 @@ const pick = <T,>(xs: T[]) => xs[int(0, xs.length - 1)]
 const chance = (p: number) => rnd() < p
 
 const lines: string[] = []
+const PAD_BUTTONS = BUTTONS.filter((b) => /^[lr]pad_(click|touch)$/.test(b.id))
 const num = (v: number) => (Object.is(v, -0) ? '0' : String(v))
 
 function randomMappings(): Mapping[] {
   const out: Mapping[] = []
   const count = int(8, 40)
   for (let i = 0; i < count; i++) {
-    const isAxis = chance(0.6)
-    const def = isAxis ? pick(AXES) : pick(BUTTONS)
-    const types: MappingType[] = isAxis ? ['cc', 'pitchbend', 'note', 'relative'] : ['note', 'cc']
+    const isAxis = chance(0.55)
+    // Favour the trackpad buttons so grids and MPE get plenty of exercise.
+    const def = isAxis ? pick(AXES) : chance(0.35) ? pick(PAD_BUTTONS) : pick(BUTTONS)
+    const types: MappingType[] = isAxis ? ['cc', 'pitchbend', 'note', 'note', 'relative'] : ['note', 'note', 'cc']
     const padButton = /^[lr]pad_(click|touch)$/.test(def.id)
+    const type = pick(types)
     out.push(
       createMapping(def.id, {
         id: `m${i}`,
         enabled: chance(0.9),
-        type: pick(types),
+        type,
         channel: int(1, 16),
         note: int(0, 127),
         velocity: int(1, 127),
         cc: int(0, 127),
         min: int(0, 127),
         max: int(0, 127),
-        toggle: chance(0.3),
+        toggle: chance(0.15),
         grid: padButton ? pick([0, 2, 3, 4]) : 0,
         speed: pick([1, 16, 64, 200, 500]),
         invert: chance(0.3),
@@ -53,6 +57,16 @@ function randomMappings(): Mapping[] {
         threshold: pick([0.02, 0.3, 0.5, 0.98]),
         gate: chance(0.25) ? pick(BUTTONS).id : null,
         release: chance(0.5) ? 'reset' : 'hold',
+        // Every source on every kind of input: the engine has to cope with
+        // combinations sanitizeMapping would never produce (e.g. 'speed' on a button).
+        velFrom: pick([...VELOCITY_SOURCES]),
+        velMin: int(1, 127),
+        gain: pick([1, 1, 1.5, 3, 10]),
+        // Momentary, so repeat actually runs (a toggle never repeats).
+        repeat: isAxis ? (chance(0.1) ? 4 : 0) : pick([0, ...REPEAT_RATES]),
+        scale: chance(0.7),
+        mpe: padButton && type === 'note' ? chance(0.6) : chance(0.05),
+        bend: pick([1, 2, 12, 48, int(1, 48)]),
       }),
     )
   }
@@ -66,14 +80,25 @@ function emitMappings(ms: Mapping[]) {
       [
         'M', m.id, m.input, m.type, +m.enabled, m.channel, m.note, m.velocity, m.cc, m.min, m.max,
         +m.toggle, m.grid, num(m.speed), +m.invert, num(m.deadzone), num(m.curve), num(m.smooth),
-        num(m.threshold), m.gate ?? '-', m.release,
+        num(m.threshold), m.gate ?? '-', m.release, m.velFrom, m.velMin, num(m.gain), m.repeat, +m.scale,
+        +m.mpe, m.bend,
       ].join(' '),
     )
   }
 }
 
+// Each message with its length: channel pressure is two bytes.
 const emitOut = (tag: string, out: number[][]) =>
-  lines.push(`${tag} ${out.length}${out.map((m) => ` ${m[0]} ${m[1]} ${m[2]}`).join('')}`)
+  lines.push(`${tag} ${out.length}${out.map((m) => ` ${m.length} ${m.join(' ')}`).join('')}`)
+
+// Raw values as given to setOptions (it clamps and rounds; the C++ must match).
+function emitOptions() {
+  const tempo = pick([20, 60, 90.5, 120, 120, 133.33, 174, 300, 10, 450])
+  const scaleRoot = chance(0.1) ? pick([-3, 3.5, 14]) : int(0, 11)
+  const scale = chance(0.3) ? 0 : chance(0.1) ? pick([-1, 2.5, 40]) : int(0, SCALES.length - 1)
+  engine.setOptions({ tempo, scaleRoot, scale })
+  lines.push(`OPTS ${num(tempo)} ${num(scaleRoot)} ${num(scale)}`)
+}
 
 // Slowly wandering raw controller values, so axes sweep and buttons hold.
 const raw = {
@@ -93,8 +118,10 @@ const walk = (v: number, step: number, lo: number, hi: number) =>
 let useTs47 = false
 
 function nextReport(): { id: number; bytes: Uint8Array } {
-  if (chance(0.15)) raw.buttons ^= pick(BUTTONS).mask
-  if (chance(0.01)) raw.buttons = 0
+  // Buttons are held for a while (so note repeat fires many times), and the
+  // trackpad ones change more often.
+  if (chance(0.08)) raw.buttons ^= (chance(0.4) ? pick(PAD_BUTTONS) : pick(BUTTONS)).mask
+  if (chance(0.0015)) raw.buttons = 0
   raw.trig = raw.trig.map((v) => (chance(0.05) ? pick([0, 32767]) : walk(v, 3000, 0, 32767)))
   raw.stick = raw.stick.map((v) => (chance(0.05) ? pick([-32768, 0, 32767]) : walk(v, 4000, -32768, 32767)))
   raw.pad = raw.pad.map((v) => (chance(0.05) ? pick([-32768, 0, 32767]) : walk(v, 6000, -32768, 32767)))
@@ -138,8 +165,14 @@ function nextReport(): { id: number; bytes: Uint8Array } {
   return { id, bytes: full.slice(0, len) }
 }
 
+// The rumble report layout.
+for (const [l, r] of [[0, 0], [65535, 65535], [32767.5, 0.4], [-5, 70000], [12345.6, 54321.2]]) {
+  lines.push(`RUMBLE ${num(l)} ${num(r)} ${Buffer.from(buildRumbleReport(l, r)).toString('hex')}`)
+}
+
 const engine = new Engine()
 const state = emptyState()
+emitOptions()
 let ctx = createContext()
 let mappings = randomMappings()
 emitMappings(mappings)
@@ -147,7 +180,7 @@ emitOut('SETOUT', engine.setMappings(mappings))
 let solo: string | null = null
 let now = 0
 
-const STEPS = 12000
+const STEPS = 30000
 for (let step = 0; step < STEPS; step++) {
   if (step % 2000 === 1999) {
     // reconnect with the other report format
@@ -155,15 +188,16 @@ for (let step = 0; step < STEPS; step++) {
     ctx = createContext()
     lines.push('NEWCTX')
   }
-  if (chance(0.004)) {
+  if (chance(0.002)) {
     // edit: sometimes a fresh set, sometimes tweak one mapping in place
-    if (chance(0.5)) mappings = randomMappings()
+    if (chance(0.75)) mappings = randomMappings()
     else mappings = mappings.map((m, i) => (i === 0 ? { ...m, note: int(0, 127), cc: int(0, 127) } : m))
     emitMappings(mappings)
     emitOut('SETOUT', engine.setMappings(mappings))
   }
+  if (chance(0.003)) emitOptions()
   if (chance(0.01)) {
-    solo = chance(0.5) ? null : pick(mappings).id
+    solo = chance(0.75) ? null : pick(mappings).id
     lines.push(`SOLO ${solo ?? '-'}`)
   }
   if (chance(0.003)) {

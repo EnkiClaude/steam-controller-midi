@@ -1,10 +1,21 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { BUTTONS, GROUPS, INPUT_BY_ID, type AxisDef, type InputDef } from '../core/inputs'
-import { describeMapping, gridPadOf, noteName, type Mapping, type MappingType } from '../core/mapping'
+import {
+  describeMapping,
+  gridPadOf,
+  noteName,
+  REPEAT_RATES,
+  VELOCITY_SOURCES,
+  type Mapping,
+  type MappingType,
+  type VelocitySource,
+} from '../core/mapping'
+import { ROOT_NAMES, SCALES, quantizeNote, scaleIndex, stepScale } from '../core/scales'
 import { runtime } from '../runtime'
 import { activeMappings, useApp } from '../store'
 import { CLUSTER_OF, findConflicts, mappedInputs } from './clusters'
 import { Field, FieldGroup, Icon, NumField, Segmented, Slider, Switch } from './controls'
+import { sendLearn } from './send'
 
 const GROUP_LABEL = Object.fromEntries(GROUPS.map((g) => [g.id, g.label]))
 const pct = (v: number) => `${Math.round(v * 100)}%`
@@ -108,6 +119,26 @@ const AXIS_TYPES: { value: MappingType; label: string }[] = [
   { value: 'note', label: 'Note' },
 ]
 
+const VELOCITY_LABEL: Record<VelocitySource, string> = {
+  fixed: 'Fixed',
+  lt: 'Left trigger',
+  rt: 'Right trigger',
+  lpad_pressure: 'Left pad pressure',
+  rpad_pressure: 'Right pad pressure',
+  speed: 'Pull speed',
+}
+
+const REPEAT_LABEL: Record<number, string> = { 0: 'Off', 2: '1/8', 3: '1/8T', 4: '1/16', 6: '1/16T', 8: '1/32' }
+
+/** How the gain ("Range") slider reads for an input: degrees for motion, a multiplier otherwise. */
+function rangeText(id: string): { label: string; format(g: number): string } {
+  if (id === 'tilt_pitch' || id === 'tilt_roll' || id === 'turn') {
+    return { label: 'Full sweep at', format: (g) => `${Math.round(90 / g)}°` }
+  }
+  if (id.startsWith('gyro_')) return { label: 'Full at', format: (g) => `${Math.round(360 / g)}°/s` }
+  return { label: 'Sensitivity', format: (g) => `×${g.toFixed(1)}` }
+}
+
 function curveText(v: number): string {
   if (Math.abs(v - 1) < 0.05) return 'Linear'
   return `${v.toFixed(1)} ${v > 1 ? 'fine' : 'fast'}`
@@ -116,12 +147,36 @@ function curveText(v: number): string {
 function MappingCard({ m, def, index, others }: { m: Mapping; def: InputDef; index: number; others: Mapping[] | undefined }) {
   const update = useApp((s) => s.updateMapping)
   const solo = useApp((s) => s.solo === m.id)
+  const scaleId = useApp((s) => s.presets[s.active].scale)
+  const scaleRoot = useApp((s) => s.presets[s.active].scaleRoot)
+  const inPlugin = useApp((s) => s.host === 'vst3' || s.host === 'au' || s.host === 'plugin')
+  const tempo = useApp((s) => s.settings.tempo)
   const [responseOpen, setResponseOpen] = useState(false)
   const set = (patch: Partial<Mapping>) => update(m.id, patch)
   const isAxis = def.kind === 'axis'
-  const canGrid = !isAxis && m.type === 'note' && gridPadOf(m.input) !== null
+  const isNote = m.type === 'note'
+  const pad = !isAxis && isNote ? gridPadOf(m.input) : null
+  const mpe = pad !== null && m.mpe
+  const canGrid = pad !== null
   const showRelease = isAxis && m.type !== 'note' && m.type !== 'relative' && (Boolean((def as AxisDef).activeWhile) || m.gate !== null)
   const title = `Mapping ${index + 1}`
+
+  // Scale mode: the note that actually plays.
+  const scale = scaleIndex(scaleId)
+  const followsScale = scale > 0 && m.scale
+  const played = followsScale ? quantizeNote(m.note, scaleRoot, scale) : m.note
+  const gridTop =
+    m.grid > 0
+      ? followsScale
+        ? stepScale(played, m.grid * m.grid - 1, scaleRoot, scale)
+        : Math.min(127, m.note + m.grid * m.grid - 1)
+      : played
+
+  const velSources = VELOCITY_SOURCES.filter((v) => v !== 'speed' || isAxis)
+  const velFixed = m.velFrom === 'fixed'
+  const canRepeat = !isAxis && isNote && !m.toggle && !mpe
+  const range = rangeText(m.input)
+  const gate = m.gate ? (INPUT_BY_ID[m.gate]?.short ?? m.gate) : null
 
   return (
     <article className={m.enabled ? 'card' : 'card card-off'} aria-label={`${title}: ${describeMapping(m)}`}>
@@ -141,8 +196,8 @@ function MappingCard({ m, def, index, others }: { m: Mapping; def: InputDef; ind
           <button
             type="button"
             className="btn btn-small btn-send"
-            title="Send this message once, for MIDI learn in Live"
-            onClick={() => runtime.sendLearn(m)}
+            title="Send this message once, for MIDI learn in Live. Other mappings are silent for 2 seconds."
+            onClick={() => sendLearn(m)}
           >
             Send
           </button>
@@ -168,23 +223,81 @@ function MappingCard({ m, def, index, others }: { m: Mapping; def: InputDef; ind
         </p>
       )}
 
+      {gate && def.group === 'motion' && (
+        <p className="card-gate">Only sends while {gate} is held.</p>
+      )}
+
       <div className="card-body">
         <FieldGroup label="Type" wide>
           <Segmented label="Message type" value={m.type} options={isAxis ? AXIS_TYPES : BUTTON_TYPES} onChange={(type) => set({ type })} />
         </FieldGroup>
 
-        <Field label="Channel">
-          <NumField label="MIDI channel" value={m.channel} min={1} max={16} onChange={(channel) => set({ channel })} />
-        </Field>
+        {!mpe && (
+          <Field label="Channel">
+            <NumField label="MIDI channel" value={m.channel} min={1} max={16} onChange={(channel) => set({ channel })} />
+          </Field>
+        )}
 
-        {m.type === 'note' && (
+        {isNote && (
           <>
-            <Field label="Note">
-              <NumField label="Note number" value={m.note} min={0} max={127} bigStep={12} suffix={noteName(m.note)} onChange={(note) => set({ note })} />
+            <Field label="Note" className="field-span2">
+              <NumField
+                label="Note number"
+                value={m.note}
+                min={0}
+                max={127}
+                bigStep={12}
+                suffix={
+                  played !== m.note ? (
+                    <span title={`Plays ${noteName(played)} (${played}) in the scale`}>
+                      {noteName(m.note)} <span className="num-played">→ {noteName(played)}</span>
+                    </span>
+                  ) : (
+                    noteName(m.note)
+                  )
+                }
+                onChange={(note) => set({ note })}
+              />
             </Field>
-            <Field label="Velocity">
-              <NumField label="Velocity" value={m.velocity} min={1} max={127} onChange={(velocity) => set({ velocity })} />
+            {velFixed && (
+              <Field label="Velocity">
+                <NumField label="Velocity" value={m.velocity} min={1} max={127} onChange={(velocity) => set({ velocity })} />
+              </Field>
+            )}
+            <Field label="Velocity from" wide>
+              <select className="select" value={m.velFrom} onChange={(e) => set({ velFrom: e.currentTarget.value as VelocitySource })}>
+                {velSources.map((v) => (
+                  <option key={v} value={v}>{VELOCITY_LABEL[v]}</option>
+                ))}
+              </select>
             </Field>
+            {!velFixed && (
+              <FieldGroup label="Velocity range" wide>
+                <span className="range-pair">
+                  <NumField label="Lowest velocity" value={m.velMin} min={1} max={127} onChange={(velMin) => set({ velMin })} />
+                  <span className="range-to">to</span>
+                  <NumField label="Highest velocity" value={m.velocity} min={1} max={127} onChange={(velocity) => set({ velocity })} />
+                </span>
+              </FieldGroup>
+            )}
+            {m.velFrom === 'speed' && (
+              <p className="card-hint">The faster you move past the threshold, the louder the note.</p>
+            )}
+            {m.input.endsWith('_touch') && pad && (m.velFrom === 'lpad_pressure' || m.velFrom === 'rpad_pressure') && (
+              <p className="card-hint">
+                Touch starts the note before you press, so pressure velocity comes out soft. Click works better for it.
+              </p>
+            )}
+            {scale > 0 && (
+              <FieldGroup label="Follow scale" wide>
+                <span className="switch-row">
+                  <Switch checked={m.scale} onChange={(v) => set({ scale: v })} label="Follow the preset's scale" />
+                  <span className="switch-text">
+                    {ROOT_NAMES[scaleRoot]} {SCALES[scale].label.toLowerCase()}
+                  </span>
+                </span>
+              </FieldGroup>
+            )}
           </>
         )}
 
@@ -236,14 +349,30 @@ function MappingCard({ m, def, index, others }: { m: Mapping; def: InputDef; ind
             </FieldGroup>
             {m.grid > 0 && (
               <p className="card-hint">
-                The pad is split into {m.grid * m.grid} zones playing {noteName(m.note)} to{' '}
-                {noteName(Math.min(127, m.note + m.grid * m.grid - 1))}, bottom-left first, like a Drum Rack.
+                The pad is split into {m.grid * m.grid} zones playing {noteName(played)} to {noteName(gridTop)}
+                {followsScale ? ' in the scale' : ''}, bottom-left first, like a Drum Rack.
               </p>
+            )}
+            <FieldGroup label="MPE" wide>
+              <Switch checked={m.mpe} onChange={(v) => set({ mpe: v })} label="MPE: per-note bend, slide and pressure" />
+            </FieldGroup>
+            {mpe && (
+              <>
+                <Field label="Slide range" wide>
+                  <span className="set-num">
+                    <NumField label="Slide range in semitones" value={m.bend} min={1} max={48} bigStep={12} suffix="semitones" onChange={(bend) => set({ bend })} />
+                  </span>
+                </Field>
+                <p className="card-hint">
+                  Each touch gets its own channel, 2–16: slide sideways to bend, up and down for CC 74, press harder for
+                  pressure. Enable MPE on the instrument in Live: right-click the device title → Enable MPE.
+                </p>
+              </>
             )}
           </>
         )}
 
-        {!isAxis && (
+        {!isAxis && !mpe && (
           <FieldGroup label="Behaviour" wide>
             <Segmented
               label="Button behaviour"
@@ -255,6 +384,24 @@ function MappingCard({ m, def, index, others }: { m: Mapping; def: InputDef; ind
               onChange={(v) => set({ toggle: v === 'toggle' })}
             />
           </FieldGroup>
+        )}
+
+        {canRepeat && (
+          <>
+            <Field label="Repeat" wide>
+              <select className="select" value={m.repeat} onChange={(e) => set({ repeat: Number(e.currentTarget.value) })}>
+                {REPEAT_RATES.map((r) => (
+                  <option key={r} value={r}>{REPEAT_LABEL[r]}</option>
+                ))}
+              </select>
+            </Field>
+            {m.repeat > 0 && (
+              <p className="card-hint">
+                Retriggers while held.{' '}
+                {inPlugin ? 'In time with Live’s tempo.' : `At ${tempo} BPM from Settings; in the plugin it follows Live’s tempo.`}
+              </p>
+            )}
+          </>
         )}
 
         {isAxis && m.type === 'note' && (
@@ -272,11 +419,12 @@ function MappingCard({ m, def, index, others }: { m: Mapping; def: InputDef; ind
             {!responseOpen && (
               <span className="response-summary">
                 {[
+                  m.gain > 1 && `${range.label.toLowerCase()} ${range.format(m.gain)}`,
                   m.invert && 'inverted',
                   m.deadzone > 0 && `deadzone ${pct(m.deadzone)}`,
                   Math.abs(m.curve - 1) >= 0.05 && `curve ${m.curve.toFixed(1)}`,
                   m.smooth > 0 && `smoothing ${pct(m.smooth)}`,
-                  m.gate && `while ${INPUT_BY_ID[m.gate]?.short ?? m.gate}`,
+                  gate && `while ${gate}`,
                 ]
                   .filter(Boolean)
                   .join(' · ') || 'default'}
@@ -285,6 +433,9 @@ function MappingCard({ m, def, index, others }: { m: Mapping; def: InputDef; ind
           </button>
           {responseOpen && (
             <div className="card-body">
+              <Field label={range.label} wide>
+                <Slider label={`Range: ${range.label.toLowerCase()}`} value={m.gain} min={1} max={10} step={0.1} format={range.format} onChange={(gain) => set({ gain })} />
+              </Field>
               <FieldGroup label="Invert" wide>
                 <Switch checked={m.invert} onChange={(invert) => set({ invert })} label="Invert direction" />
               </FieldGroup>

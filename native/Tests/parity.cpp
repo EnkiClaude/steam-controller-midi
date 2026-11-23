@@ -5,6 +5,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <algorithm>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -13,12 +14,24 @@
 using namespace scm;
 
 static int failures = 0;
+static int noteOns = 0, pressures = 0, retriggers = 0;
 static int lineNo = 0;
 
 static void fail (const std::string& what)
 {
     if (++failures <= 20)
         std::cerr << "line " << lineNo << ": " << what << "\n";
+}
+
+static VelocitySource velocitySource (const std::string& s)
+{
+    if (s == "lt") return VelocitySource::lt;
+    if (s == "rt") return VelocitySource::rt;
+    if (s == "lpad_pressure") return VelocitySource::lpadPressure;
+    if (s == "rpad_pressure") return VelocitySource::rpadPressure;
+    if (s == "speed") return VelocitySource::speed;
+    if (s != "fixed") fail ("unknown velocity source " + s);
+    return VelocitySource::fixed;
 }
 
 static std::vector<uint8_t> unhex (const std::string& s)
@@ -37,17 +50,46 @@ static void expectOut (std::istringstream& in, const MidiList& got, const char* 
     MidiList want;
     for (size_t i = 0; i < n; ++i)
     {
-        int a, b, c;
-        in >> a >> b >> c;
-        want.push_back ({ { (uint8_t) a, (uint8_t) b, (uint8_t) c } });
+        // each message is its length, then that many bytes
+        int len;
+        in >> len;
+        MidiMessage m { { 0, 0, 0 }, (uint8_t) len };
+        for (int k = 0; k < len && k < 3; ++k)
+        {
+            int b;
+            in >> b;
+            m.bytes[k] = (uint8_t) b;
+        }
+        want.push_back (m);
     }
+    auto print = [] (std::ostream& os, const MidiList& list)
+    {
+        for (auto& m : list)
+        {
+            os << " [";
+            for (int k = 0; k < m.size; ++k) os << (k ? " " : "") << (int) m.bytes[k];
+            os << "]";
+        }
+    };
+    for (auto& m : got)
+    {
+        // Unused trailing bytes must be zero, or a 2-byte message would leak garbage.
+        for (int k = m.size; k < 3; ++k)
+            if (m.bytes[k] != 0) fail (std::string (what) + ": nonzero padding byte");
+        if ((m.bytes[0] & 0xf0) == 0x90) ++noteOns;
+        if ((m.bytes[0] & 0xf0) == 0xd0) ++pressures;
+    }
+    for (size_t i = 1; i < got.size(); ++i)
+        if ((got[i - 1].bytes[0] & 0xf0) == 0x80 && got[i].bytes[0] == (got[i - 1].bytes[0] | 0x10)
+            && got[i].bytes[1] == got[i - 1].bytes[1])
+            ++retriggers;
     if (! (want == got))
     {
         std::ostringstream msg;
         msg << what << " mismatch: want";
-        for (auto& m : want) msg << " [" << (int) m.bytes[0] << " " << (int) m.bytes[1] << " " << (int) m.bytes[2] << "]";
+        print (msg, want);
         msg << " got";
-        for (auto& m : got) msg << " [" << (int) m.bytes[0] << " " << (int) m.bytes[1] << " " << (int) m.bytes[2] << "]";
+        print (msg, got);
         fail (msg.str());
     }
 }
@@ -66,6 +108,7 @@ int main (int argc, char** argv)
     size_t pendingCount = 0;
     double now = -1;
     int steps = 0;
+    int optionChanges = 0, rumbles = 0;
 
     std::string line;
     while (std::getline (file, line))
@@ -83,10 +126,15 @@ int main (int argc, char** argv)
         else if (tag == "M")
         {
             Mapping m;
-            std::string input, type, gate, release;
-            int enabled, toggle, invert;
+            std::string input, type, gate, release, velFrom;
+            int enabled, toggle, invert, scale, mpe;
             in >> m.id >> input >> type >> enabled >> m.channel >> m.note >> m.velocity >> m.cc >> m.min >> m.max
-               >> toggle >> m.grid >> m.speed >> invert >> m.deadzone >> m.curve >> m.smooth >> m.threshold >> gate >> release;
+               >> toggle >> m.grid >> m.speed >> invert >> m.deadzone >> m.curve >> m.smooth >> m.threshold >> gate >> release
+               >> velFrom >> m.velMin >> m.gain >> m.repeat >> scale >> mpe >> m.bend;
+            if (! in) { fail ("short mapping line"); continue; }
+            m.velFrom = velocitySource (velFrom);
+            m.scale = scale != 0;
+            m.mpe = mpe != 0;
             m.enabled = enabled != 0;
             m.toggle = toggle != 0;
             m.invert = invert != 0;
@@ -106,6 +154,24 @@ int main (int argc, char** argv)
             MidiList out;
             engine.setMappings (pending, out);
             expectOut (in, out, "setMappings");
+        }
+        else if (tag == "OPTS")
+        {
+            double tempo, root, scale;
+            in >> tempo >> root >> scale;
+            engine.setOptions (tempo, root, scale);
+            ++optionChanges;
+        }
+        else if (tag == "RUMBLE")
+        {
+            double l, r;
+            std::string hex;
+            in >> l >> r >> hex;
+            const auto want = unhex (hex);
+            const auto got = buildRumbleReport (l, r);
+            if (want.size() != got.size() || ! std::equal (want.begin(), want.end(), got.begin()))
+                fail ("rumble report " + hex);
+            ++rumbles;
         }
         else if (tag == "SOLO")
         {
@@ -187,6 +253,11 @@ int main (int argc, char** argv)
     for (size_t i = 0; i < rep.size(); ++i)
         if (rep[i] != (i < sizeof (want) ? want[i] : 0)) { fail ("settings report"); break; }
 
-    std::cout << steps << " engine steps replayed, " << failures << " mismatches\n";
-    return failures == 0 && steps > 1000 ? 0 : 1;
+    std::cout << steps << " engine steps replayed (" << noteOns << " note-ons, " << retriggers << " repeat retriggers, "
+              << pressures << " channel pressure, " << optionChanges << " option changes, " << rumbles
+              << " rumble reports), " << failures << " mismatches\n";
+    // A fixture that never exercises repeat or MPE would pass vacuously.
+    const bool covered = steps > 1000 && retriggers > 50 && pressures > 50 && optionChanges > 1 && rumbles > 0;
+    if (! covered) std::cerr << "fixture does not cover note repeat / MPE / options\n";
+    return failures == 0 && covered ? 0 : 1;
 }
