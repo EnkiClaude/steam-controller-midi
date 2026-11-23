@@ -20,6 +20,7 @@ private:
     void handleCommand (const juce::var&);
     void sendInit();
     void sendMidiStatus();
+    void sendHostInfo (bool force);
     juce::var hidStatusVar (const scm::Hub::Status&) const;
     static std::optional<juce::WebBrowserComponent::Resource> getResource (const juce::String& url);
 
@@ -33,6 +34,9 @@ private:
     bool statusSent = false;
     int lastConfigGeneration = 0;
     int ticks = 0;
+    int hostTicks = 0;
+    double lastHostTempo = -1;
+    bool lastHostPlaying = false;
     std::vector<ScmProcessor::MonitorEntry> monitorScratch;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ScmEditor)

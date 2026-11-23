@@ -39,7 +39,7 @@ export function SettingsDialog({ onClose }: { onClose(): void }) {
               Scale <span className="set-scope">for “{preset.name}”</span>
             </h3>
             <div className="set-grid">
-              <Field label="Key" wide>
+              <FieldGroup label="Key" wide>
                 <span className="set-pair">
                   <select
                     className="select set-root"
@@ -63,7 +63,7 @@ export function SettingsDialog({ onClose }: { onClose(): void }) {
                     ))}
                   </select>
                 </span>
-              </Field>
+              </FieldGroup>
             </div>
             <p className="set-help">
               Note mappings with Follow scale on move to the nearest note in the scale, and pad grids step through it.

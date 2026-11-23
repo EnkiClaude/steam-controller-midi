@@ -130,6 +130,28 @@ void ScmEditor::sendInit()
     statusSent = false;
     lastStateVersion = 0xffffffff;
     sendMidiStatus();
+    sendHostInfo (true);
+}
+
+void ScmEditor::sendHostInfo (bool force)
+{
+    // Only a plugin has a host transport; the standalone page shows its own tempo setting.
+    if (processor.isStandalone())
+        return;
+    const double tempo = processor.getHostTempo();
+    const bool playing = processor.isHostPlaying();
+    // ~4 Hz keeps a drifting tempo display current; changes go out at once.
+    const bool due = ++hostTicks >= 8;
+    if (! force && ! due && tempo == lastHostTempo && playing == lastHostPlaying)
+        return;
+    hostTicks = 0;
+    lastHostTempo = tempo;
+    lastHostPlaying = playing;
+    web->emitEventIfBrowserIsVisible (kEvent, object ({
+        { "type", "host" },
+        { "tempo", tempo > 0 ? juce::var (tempo) : juce::var() },
+        { "playing", playing },
+    }));
 }
 
 void ScmEditor::handleCommand (const juce::var& c)
@@ -185,6 +207,10 @@ void ScmEditor::handleCommand (const juce::var& c)
     else if (cmd == "recenter")
     {
         hub.recenterMotion();
+    }
+    else if (cmd == "hapticTest")
+    {
+        processor.hapticTest();
     }
     else if (cmd == "midiOut")
     {
@@ -251,6 +277,8 @@ void ScmEditor::timerCallback()
         web->emitEventIfBrowserIsVisible (kEvent, object ({ { "type", "hid" }, { "hid", hidStatusVar (status) } }));
     }
 
+    sendHostInfo (false);
+
     // MIDI ports come and go (standalone); refresh about once a second.
     if (processor.isStandalone() && ++ticks % 30 == 0)
         sendMidiStatus();
@@ -272,7 +300,9 @@ void ScmEditor::timerCallback()
         juce::Array<juce::var> m;
         m.add ((int) e.message.bytes[0]);
         m.add ((int) e.message.bytes[1]);
-        m.add ((int) e.message.bytes[2]);
+        // Always three entries; for a 2-byte message (channel pressure) the
+        // third is padding the page ignores.
+        m.add (e.message.size > 2 ? (int) e.message.bytes[2] : 0);
         m.add (e.sent);
         monitor.add (juce::var (m));
     }

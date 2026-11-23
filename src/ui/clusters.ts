@@ -60,6 +60,8 @@ export const CLUSTER_OF: Record<string, Cluster> = Object.fromEntries(
 /** What a mapping occupies in the DAW: two mappings with the same key fight over it. */
 export function destinationKeys(m: Mapping): string[] {
   if (m.type === 'note') {
+    // MPE notes go out on whichever of channels 2-16 is free, so they don't pin down one destination.
+    if (m.mpe && gridPadOf(m.input)) return []
     const count = m.grid > 0 && gridPadOf(m.input) ? m.grid * m.grid : 1
     return Array.from({ length: count }, (_, i) => `note:${m.channel}:${Math.min(127, m.note + i)}`)
   }

@@ -182,7 +182,7 @@ function MappingCard({ m, def, index, others }: { m: Mapping; def: InputDef; ind
     <article className={m.enabled ? 'card' : 'card card-off'} aria-label={`${title}: ${describeMapping(m)}`}>
       <header className="card-head">
         <Switch checked={m.enabled} onChange={(v) => set({ enabled: v })} label={`${title} enabled`} />
-        <span className="card-dest mono">{describeMapping(m)}</span>
+        <span className="card-dest mono" title={describeMapping(m)}>{describeMapping(m)}</span>
         <span className="card-actions">
           <button
             type="button"

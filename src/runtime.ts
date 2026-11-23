@@ -9,7 +9,7 @@ import { Debouncer } from './core/debounce'
 import { scaleIndex } from './core/scales'
 import { Engine, learnMessages, type MidiMessage } from './core/engine'
 import { INPUT_BY_ID, emptyState, type ControllerState } from './core/inputs'
-import type { Mapping } from './core/mapping'
+import { asPlayed, type Mapping } from './core/mapping'
 import {
   FEATURE_REPORT_ID,
   REPORT_RUMBLE,
@@ -170,7 +170,8 @@ class Runtime {
 
   /** Send a mapping's identifying messages (for the DAW's MIDI learn), even in learn mode. */
   sendLearn(m: Mapping): void {
-    for (const step of learnMessages(m)) {
+    const s = useApp.getState()
+    for (const step of learnMessages(asPlayed(m, s.presets[s.active]))) {
       if (step.delayMs === 0) this.send([step.message], true)
       else setTimeout(() => this.send([step.message], true), step.delayMs)
     }

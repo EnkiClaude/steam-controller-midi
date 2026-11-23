@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_SETTINGS, sanitizeSettings } from '../store'
-import { Engine, type MidiMessage } from './engine'
+import { Engine } from './engine'
 import { AXES, BUTTONS, INPUTS, INPUT_BY_ID, emptyState } from './inputs'
 import {
   FACTORY_PRESETS,

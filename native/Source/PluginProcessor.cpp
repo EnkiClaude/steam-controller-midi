@@ -21,7 +21,7 @@ ScmProcessor::ScmProcessor() : AudioProcessor (makeBuses())
     {
         const juce::ScopedLock sl (engineLock);
         scm::MidiList out;
-        engine.setMappings (scm::mappingsFromConfig (config), out);
+        applyConfigLocked (scm::configFromJson (config), out);
     }
 
     if (isStandalone())
@@ -100,10 +100,71 @@ void ScmProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuf
     auto add = [&] (int start, int count)
     {
         for (int i = 0; i < count; ++i)
-            midi.addEvent (audioQueue[(size_t) (start + i)].bytes, 3, 0);
+        {
+            const auto& m = audioQueue[(size_t) (start + i)];
+            midi.addEvent (m.bytes, m.size, 0);
+        }
     };
     add (scope.startIndex1, scope.blockSize1);
     add (scope.startIndex2, scope.blockSize2);
+
+    // The standalone app's player has no transport worth following.
+    if (isStandalone())
+        return;
+    const auto* playHead = getPlayHead();
+    const auto pos = playHead != nullptr ? playHead->getPosition() : juce::Optional<juce::AudioPlayHead::PositionInfo>();
+    if (! pos.hasValue())
+    {
+        hostBpm.store (0.0);
+        hostPlaying.store (false);
+        lastBeatPpq = -1e9;
+        return;
+    }
+    const auto bpm = pos->getBpm();
+    hostBpm.store (bpm.hasValue() && *bpm > 0 ? *bpm : 0.0);
+    hostPlaying.store (pos->getIsPlaying());
+    metronome (*pos, buffer.getNumSamples());
+}
+
+void ScmProcessor::metronome (const juce::AudioPlayHead::PositionInfo& pos, int numSamples)
+{
+    const auto mode = (scm::Metronome) metronomeMode.load();
+    const auto bpm = pos.getBpm();
+    const auto ppq = pos.getPpqPosition();
+    const double sampleRate = getSampleRate();
+    if (mode == scm::Metronome::off || ! pos.getIsPlaying() || ! bpm.hasValue() || ! ppq.hasValue() || *bpm <= 0
+        || sampleRate <= 0)
+    {
+        lastBeatPpq = -1e9;
+        return;
+    }
+
+    int numerator = 4, denominator = 4;
+    if (const auto sig = pos.getTimeSignature())
+    {
+        numerator = juce::jmax (1, sig->numerator);
+        denominator = juce::jmax (1, sig->denominator);
+    }
+    // Beats in the time signature's own unit (an eighth in 6/8), counted from
+    // the last bar line when the host says where that is.
+    const double beatLen = 4.0 / denominator;
+    const double origin = pos.getPpqPositionOfLastBarStart().orFallback (0.0);
+    const double end = *ppq + numSamples * (*bpm / 60.0) / sampleRate;
+    // The first beat at or after the block start. The small tolerance keeps a
+    // beat the host reports a rounding error past a block boundary from
+    // falling between two blocks; lastBeatPpq stops it tapping twice.
+    const double k = std::ceil ((*ppq - origin) / beatLen - 1e-6);
+    const double beatPpq = origin + k * beatLen;
+    if (beatPpq >= end || std::abs (beatPpq - lastBeatPpq) < beatLen * 0.5)
+        return;
+    lastBeatPpq = beatPpq;
+
+    const auto index = (long long) k;
+    const bool downbeat = ((index % numerator) + numerator) % numerator == 0;
+    if (mode == scm::Metronome::bar && ! downbeat)
+        return;
+    // Lock-free: just flags the tap for the hub thread.
+    hub->requestTap (downbeat ? 1.0f : hapticStrength.load());
 }
 
 // ------------------------------------------------------------- controller
@@ -111,9 +172,24 @@ void ScmProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuf
 void ScmProcessor::controllerChanged (const scm::ControllerState& state, double nowMs)
 {
     const juce::ScopedLock sl (engineLock);
+    // The host's tempo arrives on the audio thread, which never takes
+    // engineLock; pick up any change here instead.
+    const double bpm = hostBpm.load();
+    if ((bpm > 0 ? bpm : settingsTempo) != appliedTempo)
+        applyOptionsLocked();
+
     scm::MidiList out;
     engine.process (state, solo, nowMs, out);
     deliver (out, false);
+
+    // A tap for each note played (not while learning, when nothing is sent).
+    if (hapticNotes.load() && ! learn)
+        for (const auto& m : out)
+            if ((m.bytes[0] & 0xf0) == 0x90 && m.bytes[2] > 0)
+            {
+                hub->requestTap (hapticStrength.load());
+                break;
+            }
 }
 
 void ScmProcessor::controllerGone()
@@ -141,7 +217,9 @@ void ScmProcessor::deliver (const scm::MidiList& messages, bool force)
             {
                 if (port != nullptr)
                 {
-                    port->sendMessageNow (juce::MidiMessage (m.bytes[0], m.bytes[1], m.bytes[2]));
+                    // Channel pressure is a two-byte message.
+                    port->sendMessageNow (m.size == 2 ? juce::MidiMessage (m.bytes[0], m.bytes[1])
+                                                      : juce::MidiMessage (m.bytes[0], m.bytes[1], m.bytes[2]));
                     sent = true;
                 }
             }
@@ -178,12 +256,37 @@ juce::String ScmProcessor::getConfig() const
 
 void ScmProcessor::setConfig (const juce::String& json)
 {
-    auto mappings = scm::mappingsFromConfig (json);
+    const auto data = scm::configFromJson (json);
     const juce::ScopedLock sl (engineLock);
     config = json;
     scm::MidiList out;
-    engine.setMappings (mappings, out);
+    applyConfigLocked (data, out);
     deliver (out, true);
+}
+
+void ScmProcessor::applyConfigLocked (const scm::ConfigData& data, scm::MidiList& out)
+{
+    settingsTempo = data.tempo;
+    scaleRoot = data.scaleRoot;
+    scaleIndex = data.scaleIndex;
+    hapticNotes.store (data.hapticNotes);
+    hapticStrength.store ((float) data.hapticStrength);
+    metronomeMode.store ((int) data.metronome);
+    applyOptionsLocked();
+    engine.setMappings (data.mappings, out);
+}
+
+void ScmProcessor::applyOptionsLocked()
+{
+    // The host's tempo wins when there is one, so note repeat follows the song.
+    const double bpm = hostBpm.load();
+    appliedTempo = bpm > 0 ? bpm : settingsTempo;
+    engine.setOptions (appliedTempo, scaleRoot, scaleIndex);
+}
+
+void ScmProcessor::hapticTest()
+{
+    hub->requestTap (hapticStrength.load());
 }
 
 void ScmProcessor::setFlags (bool learnOn, const juce::String& soloId)
@@ -302,7 +405,7 @@ void ScmProcessor::setStateInformation (const void* data, int size)
     if (! root.isObject())
         return;
     const auto json = root["config"].toString();
-    if (! scm::mappingsFromConfig (json).empty() || juce::JSON::parse (json)["presets"].isArray())
+    if (scm::configFromJson (json).hasPresets)
     {
         setConfig (json);
         ++configGeneration;

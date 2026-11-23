@@ -1,7 +1,7 @@
 // The mapping model: how one controller input turns into MIDI.
 
 import { AXES, BUTTONS, INPUT_BY_ID } from './inputs'
-import { SCALES, type ScaleId } from './scales'
+import { SCALES, quantizeNote, scaleIndex, type ScaleId } from './scales'
 
 /** 'relative' is a CC that sends +/- steps like an endless encoder instead of a position */
 export type MappingType = 'note' | 'cc' | 'pitchbend' | 'relative'
@@ -196,6 +196,16 @@ export function gridPadOf(input: string): string | null {
 export function gridZone(x: number, y: number, grid: number): number {
   const cell = (v: number) => Math.min(grid - 1, Math.max(0, Math.floor(((v + 1) / 2) * grid)))
   return cell(y) * grid + cell(x)
+}
+
+/**
+ * A note mapping as it actually plays in `preset` (scale mode applied to its
+ * base note), for sending to a DAW's MIDI learn.
+ */
+export function asPlayed(m: Mapping, preset: Pick<Preset, 'scaleRoot' | 'scale'>): Mapping {
+  const idx = scaleIndex(preset.scale)
+  if (m.type !== 'note' || idx === 0 || m.scale === false) return m
+  return { ...m, note: quantizeNote(m.note, preset.scaleRoot, idx) }
 }
 
 export interface Preset {

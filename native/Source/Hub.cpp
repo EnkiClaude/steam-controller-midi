@@ -123,6 +123,60 @@ void Hub::recenterMotion()
     ctx.recenter();
 }
 
+void Hub::requestTap (float strength)
+{
+    // Keep the strongest request until the hub thread picks it up. A
+    // compare-exchange loop on an atomic float is lock-free on every
+    // platform we build for, so this is fine on the audio thread.
+    strength = juce::jlimit (0.0f, 1.0f, strength);
+    float cur = pendingTap.load (std::memory_order_relaxed);
+    while (strength > cur && ! pendingTap.compare_exchange_weak (cur, strength, std::memory_order_relaxed))
+    {
+    }
+}
+
+bool Hub::writeRumble (double strength)
+{
+    const auto payload = buildRumbleReport (strength * 65535, strength * 65535);
+    std::array<uint8_t, 10> buf {};
+    buf[0] = kRumbleReportId;
+    std::copy (payload.begin(), payload.end(), buf.begin() + 1);
+
+    // Prefer the interface we read state from; only one of a controller's
+    // interfaces takes output reports. If it refuses, try each other once.
+    const int first = rumbleDevice >= 0 && rumbleDevice < (int) devices.size() ? rumbleDevice
+              : source >= 0 && source < (int) devices.size() ? source : 0;
+    if (hid_write (devices[(size_t) first].handle, buf.data(), buf.size()) >= 0)
+    {
+        rumbleDevice = first;
+        return true;
+    }
+    for (int i = 0; i < (int) devices.size(); ++i)
+        if (i != first && hid_write (devices[(size_t) i].handle, buf.data(), buf.size()) >= 0)
+        {
+            rumbleDevice = i;
+            return true;
+        }
+    rumbleDevice = -1;
+    return false;
+}
+
+void Hub::serviceHaptics (double nowMs)
+{
+    const float tap = pendingTap.exchange (0.0f, std::memory_order_relaxed);
+    if (tap > 0 && nowMs - lastTap >= kTapIntervalMs)
+    {
+        lastTap = nowMs;
+        // Scheduled rather than slept, so reading never stalls for a tap.
+        tapStopAt = writeRumble (tap) ? nowMs + kTapLengthMs : -1;
+    }
+    else if (tapStopAt >= 0 && nowMs >= tapStopAt)
+    {
+        tapStopAt = -1;
+        writeRumble (0);
+    }
+}
+
 juce::var Hub::diagnostics() const
 {
     const juce::ScopedLock sl (lock);
@@ -190,6 +244,8 @@ void Hub::scan()
     devices = std::move (found);
     activeDevice = -1;
     source = -1;
+    rumbleDevice = -1;
+    tapStopAt = -1;
     const auto pid = devices.front().pid;
     status = {};
     status.phase = Phase::waiting;
@@ -206,6 +262,8 @@ void Hub::closeAll()
     devices.clear();
     activeDevice = -1;
     source = -1;
+    rumbleDevice = -1;
+    tapStopAt = -1;
 }
 
 void Hub::maintain (double nowMs)
@@ -285,6 +343,8 @@ void Hub::run()
             }
             if (devices.empty())
             {
+                // Nothing to rumble: drop taps rather than replay them on connect.
+                pendingTap.store (0.0f, std::memory_order_relaxed);
                 wait (16);
                 // Keep time-based mappings turning while a Test slider is held.
                 const juce::ScopedLock sl (lock);
@@ -296,6 +356,10 @@ void Hub::run()
 
         if (now - lastMaintenance >= kMaintenanceIntervalMs)
             maintain (now);
+
+        // The loop comes round at least every ~4 ms (the read timeout below),
+        // which bounds tap latency.
+        serviceHaptics (now);
 
         bool any = false;
         bool failed = false;

@@ -186,7 +186,7 @@ int scaleIndex (const std::string& id);
 /** The nearest note in the scale at or above `n` (or the highest below, at the top of the range). */
 int quantizeNote (int n, int root, int scale);
 
-/** The note `degrees` scale steps above `base` (which should already be in the scale); capped at 127. */
+/** The note `degrees` scale steps above `base` (which should already be in the scale); at most the highest in-scale note. */
 int stepScale (int base, int degrees, int root, int scale);
 
 // ----------------------------------------------------------------- mapping

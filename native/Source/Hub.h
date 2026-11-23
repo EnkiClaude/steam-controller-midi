@@ -60,6 +60,14 @@ public:
     void simulateEnd (bool isAxis, int index);
     void recenterMotion();
 
+    /**
+     * Ask for a short haptic tap, strength 0-1. Lock-free and does no I/O, so
+     * it is safe from any thread including the audio thread; the hub thread
+     * sends the rumble report within a few milliseconds. Taps closer together
+     * than kTapIntervalMs merge into one.
+     */
+    void requestTap (float strength);
+
     /** JSON describing what the hub has seen, for remote debugging. */
     juce::var diagnostics() const;
 
@@ -71,6 +79,8 @@ private:
     void maintain (double nowMs);
     void tickClients (double nowMs);
     void goneLocked();
+    void serviceHaptics (double nowMs);
+    bool writeRumble (double strength);
 
     struct Device
     {
@@ -97,6 +107,16 @@ private:
     double lastMaintenance = -1e9;
     double lastStateReport = -1e9;
     int activeDevice = -1;
+
+    // haptics: pendingTap is written from any thread, everything else only on the hub thread
+    static constexpr double kTapIntervalMs = 25;
+    static constexpr double kTapLengthMs = 35;
+    std::atomic<float> pendingTap { 0.0f };
+    double lastTap = -1e9;
+    /** when to send the zero report that ends the current tap, or < 0 for none */
+    double tapStopAt = -1;
+    /** interface the last tap went to, so the stop goes to the same one */
+    int rumbleDevice = -1;
 
     // diagnostics
     juce::int64 reportCount = 0;

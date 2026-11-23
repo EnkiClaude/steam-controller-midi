@@ -8,7 +8,7 @@
 
 import type { MidiMessage } from './core/engine'
 import { AXES, BUTTONS, INPUT_BY_ID, emptyState, type ControllerState } from './core/inputs'
-import { sanitizePreset, type Mapping, type Preset } from './core/mapping'
+import { asPlayed, sanitizePreset, type Mapping, type Preset } from './core/mapping'
 import type { MonitorEntry, RawReport } from './runtime'
 import { sanitizeSettings, useApp, type HostFormat, type Settings } from './store'
 
@@ -178,7 +178,8 @@ export class NativeRuntime {
   }
 
   sendLearn(m: Mapping): void {
-    this.post('sendLearn', { mapping: m })
+    const s = useApp.getState()
+    this.post('sendLearn', { mapping: asPlayed(m, s.presets[s.active]) })
   }
 
   panic(): void {

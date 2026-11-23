@@ -349,11 +349,18 @@ int stepScale (int base, int degrees, int root, int scale)
 {
     const auto& steps = stepsOf (scale);
     int n = base;
+    // Past the top of the range: stay on the highest in-scale note reached,
+    // never an out-of-scale 127.
+    int last = base;
     for (int left = degrees; left > 0;)
     {
         ++n;
-        if (n > 127) return 127;
-        if (inScale (n, root, steps)) --left;
+        if (n > 127) return last;
+        if (inScale (n, root, steps))
+        {
+            last = n;
+            --left;
+        }
     }
     return n;
 }

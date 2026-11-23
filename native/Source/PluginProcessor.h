@@ -49,6 +49,12 @@ public:
     void setFlags (bool learn, const juce::String& solo);
     void sendLearn (const juce::var& mapping);
     void panic();
+    /** The settings dialog's "test" button: one tap at the configured strength. */
+    void hapticTest();
+
+    /** The host's tempo, or 0 when it doesn't say (and always in the standalone app). */
+    double getHostTempo() const { return hostBpm.load(); }
+    bool isHostPlaying() const { return hostPlaying.load(); }
 
     scm::Hub& getHub() { return *hub; }
 
@@ -77,6 +83,12 @@ private:
 
     /** Must be called with engineLock held. */
     void deliver (const scm::MidiList&, bool force);
+    /** Take over a parsed config. Must be called with engineLock held. */
+    void applyConfigLocked (const scm::ConfigData&, scm::MidiList& out);
+    /** Push tempo and scale into the engine. Must be called with engineLock held. */
+    void applyOptionsLocked();
+    /** Audio thread: tap on the beat / bar while the host plays. */
+    void metronome (const juce::AudioPlayHead::PositionInfo&, int numSamples);
     void openMidiOutput();
 
     juce::SharedResourcePointer<scm::Hub> hub;
@@ -87,6 +99,22 @@ private:
     std::string solo;
     bool learn = false;
     std::atomic<int> configGeneration { 0 };
+
+    // tempo and scale (engineLock)
+    double settingsTempo = 120;
+    int scaleRoot = 0, scaleIndex = 0;
+    /** tempo the engine was last given, to notice host tempo changes */
+    double appliedTempo = -1;
+
+    // read on the audio thread, so atomics rather than engineLock
+    std::atomic<bool> hapticNotes { false };
+    std::atomic<float> hapticStrength { 0.5f };
+    std::atomic<int> metronomeMode { (int) scm::Metronome::off };
+    std::atomic<double> hostBpm { 0.0 };
+    std::atomic<bool> hostPlaying { false };
+    /** audio thread only: ppq of the last beat we tapped, so a beat that
+        straddles two blocks taps once */
+    double lastBeatPpq = -1e9;
 
     // hub/message thread → audio thread
     static constexpr int kFifoSize = 2048;
