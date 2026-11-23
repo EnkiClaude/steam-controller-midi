@@ -10,7 +10,7 @@ import type { MidiMessage } from './core/engine'
 import { AXES, BUTTONS, INPUT_BY_ID, emptyState, type ControllerState } from './core/inputs'
 import { sanitizePreset, type Mapping, type Preset } from './core/mapping'
 import type { MonitorEntry, RawReport } from './runtime'
-import { useApp, type HostFormat } from './store'
+import { sanitizeSettings, useApp, type HostFormat, type Settings } from './store'
 
 interface JuceBackend {
   addEventListener(id: string, fn: (payload: unknown) => void): unknown
@@ -59,7 +59,7 @@ export class NativeRuntime {
     this.backend.addEventListener(EVENT, (payload) => this.onEvent(payload as Record<string, unknown>))
 
     useApp.subscribe((s, prev) => {
-      if (s.presets !== prev.presets || s.active !== prev.active) this.pushConfig()
+      if (s.presets !== prev.presets || s.active !== prev.active || s.settings !== prev.settings) this.pushConfig()
       if (s.learn !== prev.learn || s.solo !== prev.solo) this.post('flags', { learn: s.learn, solo: s.solo ?? '' })
       if (s.midi.selectedId !== prev.midi.selectedId && s.midi.selectedId !== this.syncedMidiOut) {
         this.syncedMidiOut = s.midi.selectedId
@@ -72,8 +72,8 @@ export class NativeRuntime {
   }
 
   private pushConfig(): void {
-    const { presets, active } = useApp.getState()
-    const json = JSON.stringify({ presets, active })
+    const { presets, active, settings } = useApp.getState()
+    const json = JSON.stringify({ presets, active, settings })
     if (json === this.syncedConfig) return
     this.syncedConfig = json
     this.post('config', { json })
@@ -86,8 +86,10 @@ export class NativeRuntime {
         this.syncedConfig = typeof e.config === 'string' ? e.config : ''
         let presets: Preset[] = []
         let active = 0
+        let settings: Settings | undefined
         try {
-          const data = JSON.parse(this.syncedConfig) as { presets?: unknown[]; active?: unknown }
+          const data = JSON.parse(this.syncedConfig) as { presets?: unknown[]; active?: unknown; settings?: unknown }
+          if (data.settings !== undefined) settings = sanitizeSettings(data.settings)
           presets = (Array.isArray(data.presets) ? data.presets : [])
             .map(sanitizePreset)
             .filter((p): p is Preset => p !== null)
@@ -97,7 +99,7 @@ export class NativeRuntime {
         }
         app.setHost(e.format as HostFormat)
         if (presets.length > 0) {
-          app.replaceConfig(presets, Math.min(presets.length - 1, Math.max(0, active)))
+          app.replaceConfig(presets, Math.min(presets.length - 1, Math.max(0, active)), settings)
           // Sanitising may have changed something; make sure both sides agree.
           this.pushConfig()
         } else {
@@ -107,6 +109,13 @@ export class NativeRuntime {
         this.post('flags', { learn: app.learn, solo: app.solo ?? '' })
         break
       }
+      case 'host':
+        // The plugin's host tempo and transport, for display.
+        app.setHostInfo({
+          tempo: typeof e.tempo === 'number' && e.tempo > 0 ? e.tempo : null,
+          playing: e.playing === true,
+        })
+        break
       case 'hid':
         app.setHid(e.hid as Parameters<typeof app.setHid>[0])
         break
@@ -178,6 +187,10 @@ export class NativeRuntime {
 
   recenterMotion(): void {
     this.post('recenter')
+  }
+
+  hapticTest(): void {
+    this.post('hapticTest')
   }
 
   /** Save a preset through a native file dialog (downloads don't work in a plugin window). */

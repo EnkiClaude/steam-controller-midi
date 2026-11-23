@@ -6,11 +6,14 @@
 // arriving, so those drive everything.
 
 import { Debouncer } from './core/debounce'
+import { scaleIndex } from './core/scales'
 import { Engine, learnMessages, type MidiMessage } from './core/engine'
 import { INPUT_BY_ID, emptyState, type ControllerState } from './core/inputs'
 import type { Mapping } from './core/mapping'
 import {
   FEATURE_REPORT_ID,
+  REPORT_RUMBLE,
+  buildRumbleReport,
   MAINTENANCE_INTERVAL_MS,
   PID_BLE,
   PID_PUCK,
@@ -77,8 +80,10 @@ class Runtime {
     if (this.started) return
     this.started = true
 
+    this.applyOptions()
     this.send(this.engine.setMappings(activeMappings(useApp.getState())))
     useApp.subscribe((s, prev) => {
+      if (s.settings !== prev.settings || s.presets !== prev.presets || s.active !== prev.active) this.applyOptions()
       if (activeMappings(s) !== activeMappings(prev)) {
         this.send(this.engine.setMappings(activeMappings(s)))
       }
@@ -106,8 +111,40 @@ class Runtime {
 
   private tick(): void {
     this.stateVersion++
-    const { solo } = useApp.getState()
-    this.send(this.engine.process(this.state, solo, performance.now()))
+    const { solo, settings, learn } = useApp.getState()
+    const out = this.engine.process(this.state, solo, performance.now())
+    this.send(out)
+    if (settings.hapticNotes && !learn && out.some((m) => (m[0] & 0xf0) === 0x90 && m[2] > 0)) {
+      this.tap(settings.hapticStrength)
+    }
+  }
+
+  /** Tempo and scale from the settings and the active preset. */
+  private applyOptions(): void {
+    const s = useApp.getState()
+    const p = s.presets[s.active]
+    this.engine.setOptions({ tempo: s.settings.tempo, scaleRoot: p.scaleRoot, scale: scaleIndex(p.scale) })
+  }
+
+  private lastTap = -Infinity
+
+  /** A short buzz from the controller's haptics (0-1 strength). */
+  private tap(strength: number): void {
+    const now = performance.now()
+    const dev = this.source ?? this.devices[0]
+    if (!dev?.opened || now - this.lastTap < 25) return
+    this.lastTap = now
+    const s = strength * 65535
+    dev.sendReport(REPORT_RUMBLE, buildRumbleReport(s, s)).catch(() => {})
+    setTimeout(() => {
+      if (dev.opened) dev.sendReport(REPORT_RUMBLE, buildRumbleReport(0, 0)).catch(() => {})
+    }, 35)
+  }
+
+  /** Buzz once at the configured strength, to check haptics work. */
+  hapticTest(): void {
+    this.lastTap = -Infinity
+    this.tap(useApp.getState().settings.hapticStrength)
   }
 
   private send(messages: MidiMessage[], force = false): void {

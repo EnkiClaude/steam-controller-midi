@@ -259,6 +259,25 @@ function parseState(d: DataView, l: Layout, state: ControllerState, ctx: TritonC
   ax.tilt_roll = clamp(ctx.rawRoll - ctx.rollZero, -1, 1)
 }
 
+// --- haptics ---
+
+export const REPORT_RUMBLE = 0x80
+
+/**
+ * Payload (without the report id) of the rumble output report, as SDL sends
+ * it: { u8 type; u16 intensity; { u16 speed; i8 gain } left, right }. The
+ * controller stops on its own about 50 ms after the last one, so a single
+ * report makes a short tap.
+ */
+export function buildRumbleReport(left: number, right: number): Uint8Array<ArrayBuffer> {
+  const buf = new Uint8Array(9)
+  const v = new DataView(buf.buffer)
+  const speed = (x: number) => Math.min(65535, Math.max(0, Math.round(x)))
+  v.setUint16(3, speed(left), true)
+  v.setUint16(6, speed(right), true)
+  return buf
+}
+
 // --- feature report: keep the controller out of "lizard mode" ---
 
 export const FEATURE_REPORT_ID = 1

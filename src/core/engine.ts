@@ -4,6 +4,7 @@
 
 import { INPUT_BY_ID, type AxisDef, type ControllerState } from './inputs'
 import { gridPadOf, gridZone, type Mapping } from './mapping'
+import { SCALES, quantizeNote, stepScale } from './scales'
 
 /** Raw MIDI bytes, e.g. [0x90, 60, 100]. */
 export type MidiMessage = number[]
@@ -16,6 +17,17 @@ export const pitchBend = (ch: number, value14: number): MidiMessage => [
   value14 & 0x7f,
   (value14 >> 7) & 0x7f,
 ]
+
+export const channelPressure = (ch: number, value: number): MidiMessage => [0xd0 | (ch - 1), value]
+
+interface MpeVoice {
+  ch: number
+  /** pad X where the finger came down; bend is relative to it */
+  x0: number
+  bend: number
+  y: number
+  pressure: number
+}
 
 interface Runtime {
   /** config snapshot the runtime was built for */
@@ -35,6 +47,21 @@ interface Runtime {
   /** relative mode: fractional steps not yet sent, and the previous position */
   acc: number
   prevT: number | null
+  /** note repeat: engine clock time of the next retrigger */
+  nextRepeat: number | null
+  /** MPE voice while a pad note is held */
+  mpe: MpeVoice | null
+  /** axis → note: previous travel (for 'speed' velocity) and the velocity it gave */
+  prevTravel: number | null
+  speedVel: number
+}
+
+export interface EngineOptions {
+  /** beats per minute, for note repeat */
+  tempo: number
+  /** scale mode: root 0-11 and an index into SCALES (0 = chromatic, i.e. off) */
+  scaleRoot: number
+  scale: number
 }
 
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v)
@@ -42,14 +69,16 @@ const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v)
 /** Shape a raw axis value into a 0-1 position (0.5 = rest for bipolar axes). */
 export function shapeAxis(raw: number, def: AxisDef, m: Mapping): number {
   const dz = m.deadzone
+  const gain = m.gain ?? 1
   let t: number
   if (def.polarity === 'bipolar') {
-    const mag = Math.abs(raw)
+    const mag = Math.min(1, Math.abs(raw) * gain)
     let v = mag <= dz ? 0 : (mag - dz) / (1 - dz)
     v = Math.pow(clamp01(v), m.curve)
     t = 0.5 + (Math.sign(raw) * v) / 2
   } else {
-    const v = raw <= dz ? 0 : (raw - dz) / (1 - dz)
+    const r = Math.min(1, raw * gain)
+    const v = r <= dz ? 0 : (r - dz) / (1 - dz)
     t = Math.pow(clamp01(v), m.curve)
   }
   return m.invert ? 1 - t : t
@@ -60,9 +89,27 @@ function restPosition(def: AxisDef, m: Mapping): number {
   return shapeAxis(0, def, m)
 }
 
+/** Full travel in this many seconds or less gives full 'speed' velocity. */
+const SPEED_FULL_PER_SEC = 25
+/** MPE: member channels use the MPE default bend range of ±48 semitones. */
+const MPE_BEND_RANGE = 48
+
 export class Engine {
   private runtimes = new Map<string, Runtime>()
   private order: Runtime[] = []
+  private opts: EngineOptions = { tempo: 120, scaleRoot: 0, scale: 0 }
+  /** engine time in ms: the caller's clock, or 4 ms per call without one */
+  private clock = 0
+  private mpeBusy = new Set<number>()
+  private mpeNext = 2
+
+  setOptions(o: Partial<EngineOptions>): void {
+    const next = { ...this.opts, ...o }
+    next.tempo = Math.min(300, Math.max(20, Number.isFinite(next.tempo) ? next.tempo : 120))
+    next.scaleRoot = Math.min(11, Math.max(0, Math.round(next.scaleRoot) || 0))
+    next.scale = Math.min(SCALES.length - 1, Math.max(0, Math.round(next.scale) || 0))
+    this.opts = next
+  }
 
   /**
    * Replace the active mappings. Returns the messages needed to cleanly stop
@@ -93,6 +140,10 @@ export class Engine {
         active: false,
         acc: 0,
         prevT: null,
+        nextRepeat: null,
+        mpe: null,
+        prevTravel: null,
+        speedVel: m.velocity,
       })
     }
     for (const [id, rt] of this.runtimes) {
@@ -115,7 +166,16 @@ export class Engine {
       out.push(noteOff(rt.heldNote.ch, rt.heldNote.note))
       rt.heldNote = null
     }
+    this.freeVoice(rt)
     rt.on = false
+    rt.nextRepeat = null
+  }
+
+  private freeVoice(rt: Runtime): void {
+    if (rt.mpe) {
+      this.mpeBusy.delete(rt.mpe.ch)
+      rt.mpe = null
+    }
   }
 
   private lastNow: number | null = null
@@ -124,17 +184,20 @@ export class Engine {
 
   /**
    * Feed one controller snapshot; returns the MIDI to send, in order.
-   * `nowMs` is only needed for relative mappings on rate-style axes; without
-   * it the controller's 250 Hz report rate is assumed.
+   * `nowMs` is needed for relative mappings on rate-style axes, note repeat
+   * and 'speed' velocity; without it the controller's 250 Hz report rate is
+   * assumed.
    */
   process(state: ControllerState, solo: string | null = null, nowMs?: number): MidiMessage[] {
     const out: MidiMessage[] = []
     if (nowMs === undefined) {
       this.dt = 0.004
+      this.clock += 4
     } else {
       // A long gap (controller asleep, tab suspended) must not turn into a burst.
       this.dt = this.lastNow === null ? 0 : Math.min(0.1, Math.max(0, (nowMs - this.lastNow) / 1000))
       this.lastNow = nowMs
+      this.clock = nowMs
     }
     for (const rt of this.order) {
       const m = rt.mapping
@@ -149,19 +212,44 @@ export class Engine {
     return out
   }
 
-  private setOn(rt: Runtime, on: boolean, out: MidiMessage[], noteOffset = 0): void {
+  /** The note a mapping plays, `offset` grid zones up, after scale mode. */
+  private noteFor(m: Mapping, offset: number): number {
+    const { scale, scaleRoot } = this.opts
+    if (scale > 0 && m.scale !== false) {
+      const base = quantizeNote(m.note, scaleRoot, scale)
+      return offset > 0 ? stepScale(base, offset, scaleRoot, scale) : base
+    }
+    return Math.min(127, m.note + offset)
+  }
+
+  private velocityFor(rt: Runtime, state: ControllerState): number {
+    const m = rt.mapping
+    const src = m.velFrom ?? 'fixed'
+    if (src === 'fixed') return m.velocity
+    if (src === 'speed') return INPUT_BY_ID[m.input].kind === 'axis' ? rt.speedVel : m.velocity
+    const v = clamp01(state.axes[src] ?? 0)
+    return Math.min(127, Math.max(1, Math.round(m.velMin + v * (m.velocity - m.velMin))))
+  }
+
+  private repeatInterval(m: Mapping): number {
+    return 60000 / this.opts.tempo / m.repeat
+  }
+
+  private setOn(rt: Runtime, on: boolean, out: MidiMessage[], noteOffset = 0, velocity?: number): void {
     const m = rt.mapping
     if (on === rt.on) return
     rt.on = on
     if (m.type === 'note') {
       if (on) {
-        const note = Math.min(127, m.note + noteOffset)
+        const note = this.noteFor(m, noteOffset)
         rt.heldNote = { ch: m.channel, note }
-        out.push(noteOn(m.channel, note, m.velocity))
+        out.push(noteOn(m.channel, note, velocity ?? m.velocity))
       } else if (rt.heldNote) {
         out.push(noteOff(rt.heldNote.ch, rt.heldNote.note))
         rt.heldNote = null
+        this.freeVoice(rt)
       }
+      if (!on) rt.nextRepeat = null
     } else {
       out.push(controlChange(m.channel, m.cc, on ? m.max : m.min))
     }
@@ -180,17 +268,102 @@ export class Engine {
       else if (!m.toggle) rt.on = false
       return
     }
-    if (pressed === was) return
+
+    const pad = m.type === 'note' ? gridPadOf(m.input) : null
+    if (pad && m.mpe) {
+      this.processMpe(rt, state, pad, pressed, was, out)
+      return
+    }
+
+    if (pressed === was) {
+      // Note repeat: retrigger the held note in time.
+      if (pressed && rt.heldNote && rt.nextRepeat !== null && this.clock >= rt.nextRepeat) {
+        const { ch, note } = rt.heldNote
+        out.push(noteOff(ch, note), noteOn(ch, note, this.velocityFor(rt, state)))
+        const interval = this.repeatInterval(m)
+        rt.nextRepeat += interval
+        // Fell behind (a gap in reports): carry on from now rather than catch up in a burst.
+        if (rt.nextRepeat <= this.clock) rt.nextRepeat = this.clock + interval
+      }
+      return
+    }
     // Trackpad note grid: the zone under the finger at the moment of the
     // press picks the note.
     let offset = 0
-    const pad = pressed && m.type === 'note' && m.grid > 0 ? gridPadOf(m.input) : null
-    if (pad) offset = gridZone(state.axes[`${pad}_x`] ?? 0, state.axes[`${pad}_y`] ?? 0, m.grid)
-    if (m.toggle) {
-      if (pressed) this.setOn(rt, !rt.on, out, offset)
-    } else {
-      this.setOn(rt, pressed, out, offset)
+    if (pressed && pad && m.grid > 0) {
+      offset = gridZone(state.axes[`${pad}_x`] ?? 0, state.axes[`${pad}_y`] ?? 0, m.grid)
     }
+    const velocity = pressed ? this.velocityFor(rt, state) : undefined
+    if (m.toggle) {
+      if (pressed) this.setOn(rt, !rt.on, out, offset, velocity)
+    } else {
+      this.setOn(rt, pressed, out, offset, velocity)
+      if (pressed && m.type === 'note' && m.repeat > 0) rt.nextRepeat = this.clock + this.repeatInterval(m)
+    }
+  }
+
+  /** A trackpad note in MPE mode: its own channel, with per-note bend, CC 74 and pressure. */
+  private processMpe(
+    rt: Runtime,
+    state: ControllerState,
+    pad: string,
+    pressed: boolean,
+    was: boolean,
+    out: MidiMessage[],
+  ): void {
+    const m = rt.mapping
+    const x = state.axes[`${pad}_x`] ?? 0
+    const yVal = Math.min(127, Math.max(0, Math.round(((clamp01(((state.axes[`${pad}_y`] ?? 0) + 1) / 2)) * 127))))
+    const pVal = Math.min(127, Math.max(0, Math.round(clamp01(state.axes[`${pad}_pressure`] ?? 0) * 127)))
+
+    if (pressed && !was) {
+      if (rt.heldNote) this.setOn(rt, false, out)
+      const ch = this.allocateChannel()
+      const offset = m.grid > 0 ? gridZone(x, state.axes[`${pad}_y`] ?? 0, m.grid) : 0
+      const note = this.noteFor(m, offset)
+      // Per MPE: set the channel's expression before the note starts.
+      out.push(pitchBend(ch, 8192), controlChange(ch, 74, yVal), channelPressure(ch, pVal))
+      out.push(noteOn(ch, note, this.velocityFor(rt, state)))
+      rt.on = true
+      rt.heldNote = { ch, note }
+      rt.mpe = { ch, x0: x, bend: 8192, y: yVal, pressure: pVal }
+      return
+    }
+    if (!pressed && was) {
+      this.setOn(rt, false, out)
+      return
+    }
+    const v = rt.mpe
+    if (!pressed || !v) return
+    const bend = Math.min(16383, Math.max(0, Math.round(8192 + ((x - v.x0) * m.bend * 8192) / MPE_BEND_RANGE)))
+    if (bend !== v.bend) {
+      v.bend = bend
+      out.push(pitchBend(v.ch, bend))
+    }
+    if (yVal !== v.y) {
+      v.y = yVal
+      out.push(controlChange(v.ch, 74, yVal))
+    }
+    if (pVal !== v.pressure) {
+      v.pressure = pVal
+      out.push(channelPressure(v.ch, pVal))
+    }
+  }
+
+  /** Round-robin over member channels 2-16, so a released note's tail isn't cut off by the next. */
+  private allocateChannel(): number {
+    for (let k = 0; k < 15; k++) {
+      const ch = 2 + ((this.mpeNext - 2 + k) % 15)
+      if (!this.mpeBusy.has(ch)) {
+        this.mpeBusy.add(ch)
+        this.mpeNext = 2 + ((ch - 2 + 1) % 15)
+        return ch
+      }
+    }
+    // All fifteen in use (can't happen with two pads): share the next one.
+    const ch = this.mpeNext
+    this.mpeNext = 2 + ((ch - 2 + 1) % 15)
+    return ch
   }
 
   private processAxis(rt: Runtime, def: AxisDef, state: ControllerState, live: boolean, out: MidiMessage[]): void {
@@ -206,6 +379,7 @@ export class Engine {
         rt.smoothed = null
         rt.acc = 0
         rt.prevT = null
+        rt.prevTravel = null
         if (m.type === 'relative') {
           // an encoder has no position to hold or reset
         } else if (m.type === 'note') {
@@ -235,10 +409,18 @@ export class Engine {
       // A bipolar axis rests in the middle, so the note fires on distance
       // from rest in either direction rather than on absolute position.
       const travel = def.polarity === 'bipolar' ? Math.abs(t - 0.5) * 2 : t
+      // How fast it is moving, for 'speed' velocity.
+      if (rt.prevTravel === null || this.dt <= 0) {
+        rt.speedVel = m.velocity
+      } else {
+        const v = clamp01((travel - rt.prevTravel) / this.dt / SPEED_FULL_PER_SEC)
+        rt.speedVel = Math.min(127, Math.max(1, Math.round(m.velMin + v * (m.velocity - m.velMin))))
+      }
+      rt.prevTravel = travel
       // Hysteresis so a value hovering at the threshold doesn't machine-gun.
       const over = rt.pressed ? travel >= m.threshold * 0.85 : travel >= m.threshold
       rt.pressed = over
-      this.setOn(rt, over, out)
+      this.setOn(rt, over, out, 0, over && !rt.on ? this.velocityFor(rt, state) : undefined)
       return
     }
     if (m.type === 'relative') {
@@ -329,6 +511,8 @@ export function formatMessage(msg: MidiMessage): { kind: string; channel: number
       return { kind: 'CC', channel, detail: `${msg[1]} = ${msg[2]}` }
     case 0xe0:
       return { kind: 'Bend', channel, detail: `${((msg[2] << 7) | msg[1]) - 8192}` }
+    case 0xd0:
+      return { kind: 'Pressure', channel, detail: `${msg[1]}` }
     default:
       return { kind: 'Other', channel, detail: msg.map((b) => b.toString(16).padStart(2, '0')).join(' ') }
   }

@@ -50,17 +50,44 @@ export interface GamepadStatus {
   name: string
 }
 
+/** App-wide settings (not per preset). */
+export interface Settings {
+  /** beats per minute for note repeat when there's no host tempo (web app, standalone) */
+  tempo: number
+  /** a short haptic tap from the controller on every note */
+  hapticNotes: boolean
+  /** 0.05-1 */
+  hapticStrength: number
+  /** a tap on every beat or bar while the host is playing (plugin only) */
+  metronome: 'off' | 'beat' | 'bar'
+}
+
+export const DEFAULT_SETTINGS: Settings = { tempo: 120, hapticNotes: false, hapticStrength: 0.5, metronome: 'off' }
+
+export function sanitizeSettings(raw: unknown): Settings {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  const num = (v: unknown, lo: number, hi: number, d: number) =>
+    typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d
+  return {
+    tempo: Math.round(num(r.tempo, 20, 300, DEFAULT_SETTINGS.tempo)),
+    hapticNotes: r.hapticNotes === true,
+    hapticStrength: num(r.hapticStrength, 0.05, 1, DEFAULT_SETTINGS.hapticStrength),
+    metronome: r.metronome === 'beat' || r.metronome === 'bar' ? r.metronome : 'off',
+  }
+}
+
 interface Persisted {
   presets: Preset[]
   active: number
   midiOutId: string | null
+  settings: Settings
 }
 
 const STORAGE_KEY = 'steam-controller-midi/v1'
 
 function load(): Persisted {
   // Inside the app / plugin the native side owns the settings and sends them over.
-  if (inNative) return { presets: [defaultPreset()], active: 0, midiOutId: null }
+  if (inNative) return { presets: [defaultPreset()], active: 0, midiOutId: null, settings: { ...DEFAULT_SETTINGS } }
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (raw) {
@@ -70,13 +97,18 @@ function load(): Persisted {
         .filter((p): p is Preset => p !== null)
       if (presets.length > 0) {
         const active = typeof data.active === 'number' ? Math.min(presets.length - 1, Math.max(0, data.active)) : 0
-        return { presets, active, midiOutId: typeof data.midiOutId === 'string' ? data.midiOutId : null }
+        return {
+          presets,
+          active,
+          midiOutId: typeof data.midiOutId === 'string' ? data.midiOutId : null,
+          settings: sanitizeSettings(data.settings),
+        }
       }
     }
   } catch {
     // unreadable or blocked storage: start fresh
   }
-  return { presets: [defaultPreset()], active: 0, midiOutId: null }
+  return { presets: [defaultPreset()], active: 0, midiOutId: null, settings: { ...DEFAULT_SETTINGS } }
 }
 
 function save(s: Persisted): void {
@@ -99,9 +131,15 @@ export interface AppState extends Persisted {
   midi: MidiStatus
   gamepad: GamepadStatus
 
+  /** plugin only: the host's tempo (null when it doesn't say) and whether it is playing */
+  hostInfo: { tempo: number | null; playing: boolean }
+  setHostInfo(info: { tempo: number | null; playing: boolean }): void
   setHost(host: HostFormat): void
   /** Replace every preset at once (settings arriving from the native side). */
-  replaceConfig(presets: Preset[], active: number): void
+  replaceConfig(presets: Preset[], active: number, settings?: Settings): void
+  setSettings(patch: Partial<Settings>): void
+  /** scale mode for the active preset */
+  setPresetScale(root: number, scale: Preset['scale']): void
   selectInput(id: string | null): void
   setLearn(on: boolean): void
   setSolo(id: string | null): void
@@ -154,8 +192,19 @@ export const useApp = create<AppState>((set, get) => {
     },
     gamepad: { connected: false, name: '' },
 
+    hostInfo: { tempo: null, playing: false },
+    setHostInfo: (info) => {
+      const cur = get().hostInfo
+      if (cur.tempo !== info.tempo || cur.playing !== info.playing) set({ hostInfo: info })
+    },
     setHost: (host) => set({ host }),
-    replaceConfig: (presets, active) => set({ presets, active, solo: null }),
+    replaceConfig: (presets, active, settings) =>
+      set(settings ? { presets, active, solo: null, settings } : { presets, active, solo: null }),
+    setSettings: (patch) => set({ settings: sanitizeSettings({ ...get().settings, ...patch }) }),
+    setPresetScale: (root, scale) => {
+      const { presets, active } = get()
+      set({ presets: presets.map((p, i) => (i === active ? { ...p, scaleRoot: root, scale } : p)) })
+    },
     selectInput: (id) => set({ selectedInput: id }),
     setLearn: (on) => set({ learn: on }),
     setSolo: (id) => set({ solo: id }),
@@ -186,13 +235,17 @@ export const useApp = create<AppState>((set, get) => {
       if (index >= 0 && index < get().presets.length) set({ active: index, solo: null })
     },
     addPreset: (preset) => {
-      const presets = [...get().presets, preset ?? { name: 'New preset', mappings: [] }]
+      const presets: Preset[] = [
+        ...get().presets,
+        preset ?? { name: 'New preset', mappings: [], scaleRoot: 0, scale: 'chromatic' },
+      ]
       set({ presets, active: presets.length - 1, solo: null })
     },
     duplicatePreset: () => {
       const { presets, active } = get()
       const src = presets[active]
       const copy: Preset = {
+        ...src,
         name: `${src.name} copy`,
         mappings: src.mappings.map((m) => ({ ...m, id: newId() })),
       }
@@ -224,8 +277,13 @@ export const useApp = create<AppState>((set, get) => {
 })
 
 useApp.subscribe((s, prev) => {
-  if (s.presets !== prev.presets || s.active !== prev.active || s.midiOutId !== prev.midiOutId) {
-    save({ presets: s.presets, active: s.active, midiOutId: s.midiOutId })
+  if (
+    s.presets !== prev.presets ||
+    s.active !== prev.active ||
+    s.midiOutId !== prev.midiOutId ||
+    s.settings !== prev.settings
+  ) {
+    save({ presets: s.presets, active: s.active, midiOutId: s.midiOutId, settings: s.settings })
   }
 })
 
