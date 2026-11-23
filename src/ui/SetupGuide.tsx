@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { runtime } from '../runtime'
 import { useApp } from '../store'
 import { Icon } from './controls'
+import { useModal } from './dialog'
 import { onFrame } from './live'
 
 function Diagnostics() {
@@ -83,34 +84,7 @@ export function SetupGuide({ onClose }: { onClose(): void }) {
   const panel = useRef<HTMLDivElement>(null)
   const host = useApp((s) => s.host)
 
-  useEffect(() => {
-    const before = document.activeElement as HTMLElement | null
-    closeBtn.current?.focus()
-    const key = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose()
-        return
-      }
-      if (e.key !== 'Tab' || !panel.current) return
-      // Keep focus inside the dialog.
-      const items = panel.current.querySelectorAll<HTMLElement>('button, [href], [tabindex]:not([tabindex="-1"])')
-      if (items.length === 0) return
-      const first = items[0]
-      const last = items[items.length - 1]
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault()
-        last.focus()
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault()
-        first.focus()
-      }
-    }
-    document.addEventListener('keydown', key)
-    return () => {
-      document.removeEventListener('keydown', key)
-      before?.focus?.()
-    }
-  }, [onClose])
+  useModal(panel, closeBtn, onClose)
 
   return (
     <div className="overlay" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>

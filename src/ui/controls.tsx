@@ -137,9 +137,11 @@ export function Slider(props: {
   )
 }
 
-export function Field(props: { label: string; wide?: boolean; children: ReactNode }) {
+const fieldClass = (wide?: boolean, extra?: string) => ['field', wide && 'field-wide', extra].filter(Boolean).join(' ')
+
+export function Field(props: { label: string; wide?: boolean; className?: string; children: ReactNode }) {
   return (
-    <label className={props.wide ? 'field field-wide' : 'field'}>
+    <label className={fieldClass(props.wide, props.className)}>
       <span className="field-label">{props.label}</span>
       {props.children}
     </label>
@@ -147,9 +149,9 @@ export function Field(props: { label: string; wide?: boolean; children: ReactNod
 }
 
 /** Same as Field but for controls that are groups of buttons (a label would forward clicks). */
-export function FieldGroup(props: { label: string; wide?: boolean; children: ReactNode }) {
+export function FieldGroup(props: { label: string; wide?: boolean; className?: string; children: ReactNode }) {
   return (
-    <div className={props.wide ? 'field field-wide' : 'field'}>
+    <div className={fieldClass(props.wide, props.className)}>
       <span className="field-label">{props.label}</span>
       {props.children}
     </div>

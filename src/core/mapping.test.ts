@@ -313,7 +313,8 @@ describe('sanitizePreset', () => {
   })
 
   it('accepts an empty mapping list', () => {
-    expect(sanitizePreset({ name: 'Empty', mappings: [] })).toEqual({ name: 'Empty', mappings: [] })
+    // A preset without scale fields loads with scale mode off.
+    expect(sanitizePreset({ name: 'Empty', mappings: [] })).toEqual({ name: 'Empty', mappings: [], scaleRoot: 0, scale: 'chromatic' })
   })
 
   it('drops invalid entries and keeps the valid ones in order', () => {

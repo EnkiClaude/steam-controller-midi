@@ -1,9 +1,9 @@
 import { GROUPS, INPUTS, INPUT_BY_ID } from '../core/inputs'
 import { describeMapping, type Mapping } from '../core/mapping'
-import { runtime } from '../runtime'
 import { activeMappings, useApp } from '../store'
 import { findConflicts } from './clusters'
 import { Icon, Switch } from './controls'
+import { sendLearn } from './send'
 
 const ORDER = new Map(INPUTS.map((d, i) => [d.id, i]))
 
@@ -50,7 +50,7 @@ function Row({ m, conflict }: { m: Mapping; conflict: boolean }) {
           aria-label={`Send ${describeMapping(m)} for ${def.label}`}
           onClick={(e) => {
             e.stopPropagation()
-            runtime.sendLearn(m)
+            sendLearn(m)
           }}
         >
           Send

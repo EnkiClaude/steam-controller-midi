@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { sanitizePreset } from '../core/mapping'
+import { FACTORY_PRESETS, sanitizePreset } from '../core/mapping'
 import { NativeRuntime } from '../nativeRuntime'
 import { runtime } from '../runtime'
 import { activeMappings, useApp } from '../store'
 import { Icon } from './controls'
+import { useSendingId } from './send'
 
 const TRANSPORT = { usb: 'USB', bluetooth: 'Bluetooth', puck: 'Wireless puck', '': '' } as const
 
@@ -294,6 +295,24 @@ function PresetMenu() {
               <button type="button" role="menuitem" className="menu-item" onClick={() => { app().duplicatePreset(); setOpen(false) }}>Duplicate</button>
               <button type="button" role="menuitem" className="menu-item" onClick={() => { setName(current.name); setMode('rename') }}>Rename…</button>
               <div className="menu-sep" />
+              <div role="group" aria-labelledby="menu-templates">
+                <span className="menu-label" id="menu-templates">New from template</span>
+                {FACTORY_PRESETS.map((f) => (
+                  <button
+                    key={f.id}
+                    type="button"
+                    role="menuitem"
+                    className="menu-item menu-item-indent"
+                    onClick={() => {
+                      app().addPreset(f.make())
+                      setOpen(false)
+                    }}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+              <div className="menu-sep" />
               <button type="button" role="menuitem" className="menu-item" onClick={exportPreset}>Export to file</button>
               <button type="button" role="menuitem" className="menu-item" onClick={chooseImport}>Import from file…</button>
               <div className="menu-sep" />
@@ -319,7 +338,7 @@ function PresetMenu() {
   )
 }
 
-export function TopBar({ onSetup }: { onSetup(): void }) {
+export function TopBar({ onSetup, onSettings }: { onSetup(): void; onSettings(): void }) {
   const learn = useApp((s) => s.learn)
   const setLearn = useApp((s) => s.setLearn)
   return (
@@ -350,6 +369,7 @@ export function TopBar({ onSetup }: { onSetup(): void }) {
       <button type="button" className="btn btn-panic" title="Stop all notes on every channel" onClick={() => runtime.panic()}>
         Panic
       </button>
+      <button type="button" className="btn" onClick={onSettings}>Settings</button>
       <button type="button" className="btn" onClick={onSetup}>Setup</button>
     </header>
   )
@@ -362,6 +382,7 @@ export function Notices() {
   const gamepad = useApp((s) => s.gamepad)
   const solo = useApp((s) => s.solo)
   const setSolo = useApp((s) => s.setSolo)
+  const sending = useSendingId()
   const setHid = useApp((s) => s.setHid)
   const limited = gamepad.connected && hid.phase !== 'connected'
   const mouseMode = hid.phase === 'connected' && hid.settingsOk === false
@@ -382,7 +403,11 @@ export function Notices() {
       {solo && (
         <div className="notice" role="status">
           <span className="notice-tag">Solo</span>
-          <span>One mapping is soloed, so every other mapping is silent.</span>
+          <span>
+            {solo === sending
+              ? 'Sending for MIDI learn: every other mapping is silent for a moment.'
+              : 'One mapping is soloed, so every other mapping is silent.'}
+          </span>
           <button type="button" className="btn btn-small notice-action" onClick={() => setSolo(null)}>Clear solo</button>
         </div>
       )}

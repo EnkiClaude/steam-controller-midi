@@ -4,6 +4,7 @@ import { ControllerView } from './ui/ControllerView'
 import { Inspector } from './ui/Inspector'
 import { MappingsTable } from './ui/MappingsTable'
 import { Monitor } from './ui/Monitor'
+import { SettingsDialog } from './ui/SettingsDialog'
 import { SetupGuide } from './ui/SetupGuide'
 import { Notices, TopBar } from './ui/TopBar'
 
@@ -22,6 +23,8 @@ type Tab = 'controller' | 'mappings'
 export default function App() {
   const [tab, setTab] = useState<Tab>('controller')
   const [setupOpen, setSetupOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const closeSettings = useCallback(() => setSettingsOpen(false), [])
   const needsPort = useApp((s) => s.midi.phase === 'ready' && s.midi.outputs.length === 0)
   const mappingCount = useApp((s) => s.presets[s.active].mappings.length)
 
@@ -43,7 +46,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <TopBar onSetup={() => setSetupOpen(true)} />
+      <TopBar onSetup={() => setSetupOpen(true)} onSettings={() => setSettingsOpen(true)} />
       <Notices />
       <main className="main">
         <section className="stage">
@@ -70,6 +73,7 @@ export default function App() {
         <Inspector />
       </main>
       {setupOpen && <SetupGuide onClose={closeSetup} />}
+      {settingsOpen && <SettingsDialog onClose={closeSettings} />}
     </div>
   )
 }
