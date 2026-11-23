@@ -89,7 +89,7 @@ function restPosition(def: AxisDef, m: Mapping): number {
   return shapeAxis(0, def, m)
 }
 
-/** Full travel in this many seconds or less gives full 'speed' velocity. */
+/** Travel per second (full range = 1) that gives full 'speed' velocity: full travel in 40 ms. */
 const SPEED_FULL_PER_SEC = 25
 /** MPE: member channels use the MPE default bend range of ±48 semitones. */
 const MPE_BEND_RANGE = 48
