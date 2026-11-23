@@ -37,6 +37,22 @@ the zip under *Artifacts*. Each zip has an `Install.txt`. The builds are not
 signed by Apple or Microsoft, so the first launch needs one extra step, which
 `Install.txt` describes.
 
+**Removing the macOS security steps.** The Mac builds open without any
+Gatekeeper warning once they are signed with an Apple Developer ID
+($99/year Apple Developer Program). In the repository's Settings → Secrets and
+variables → Actions, add:
+
+| Secret | What it is |
+| --- | --- |
+| `MACOS_CERTIFICATE_P12` | Your "Developer ID Application" certificate exported from Keychain Access as .p12, then base64-encoded (`base64 -i cert.p12 \| pbcopy`) |
+| `MACOS_CERTIFICATE_PASSWORD` | The password you gave the .p12 when exporting |
+| `APPLE_ID` | Your Apple ID email |
+| `APPLE_APP_PASSWORD` | An app-specific password from appleid.apple.com |
+| `APPLE_TEAM_ID` | Your 10-character team ID (developer.apple.com → Membership) |
+
+The next build then signs, notarises and staples automatically. Without them
+it falls back to the unsigned builds described in `Install.txt`.
+
 To build them yourself (CMake 3.22+, a C++17 compiler, Node 22):
 
 ```bash
@@ -108,6 +124,26 @@ Two extras for playing rather than just mapping:
   position. Swipe a trackpad to nudge a parameter from wherever it is, or push a
   stick to turn it at a speed. After mapping it in Live, set that mapping's mode
   to *Relative (2's Comp.)* in the bar at the bottom of Live's window.
+
+More ways to play (0.2):
+
+- **Velocity:** notes can take their velocity from how hard you press a
+  trackpad, how far a trigger is pulled, or (for a trigger played as a note)
+  how fast you pull it.
+- **Note repeat:** hold a button to retrigger its note at 1/8, 1/16 or 1/32
+  (straight or triplet), locked to Live's tempo in the plugin, or to the Tempo
+  setting in the app.
+- **Scale mode:** pick a key and scale per preset; buttons and pad grids then
+  only play notes in it.
+- **MPE trackpads:** each touch is its own voice on channels 2–16. Slide to
+  bend, move up and down for CC 74, press harder for pressure. Enable MPE on
+  the instrument in Live (right-click the device title → Enable MPE); Vital
+  supports it.
+- **Range:** tilt, yaw, gyro and the sticks have a range setting, for example
+  a full filter sweep from a 20° tilt.
+- **Haptics:** a short tap from the controller on every note, and in the
+  plugin a metronome you feel on each beat or bar while Live plays.
+- **Templates:** Drum kit, Synth performance (MPE) and Clip launcher presets.
 
 Each mapping has its own channel, output range, invert, deadzone, response curve
 and smoothing. Trackpad and gated mappings can hold their last value or snap

@@ -42,12 +42,19 @@ jobs:
           cp -R "$A/Standalone/Steam Controller MIDI.app" "$OUT/"
           cp -R "$A/VST3/Steam Controller MIDI.vst3" "$OUT/"
           cp -R "$AU/AU/Steam Controller MIDI.component" "$OUT/"
-          # Not notarised: an ad-hoc signature is the most we can do without a developer account.
-          codesign --force --deep --sign - "$OUT/Steam Controller MIDI.app"
-          codesign --force --deep --sign - "$OUT/Steam Controller MIDI.vst3"
-          codesign --force --deep --sign - "$OUT/Steam Controller MIDI.component"
-          cp native/INSTALL-macOS.txt "$OUT/Install.txt"
-          ditto -c -k --keepParent "$OUT" "SteamControllerMIDI-macOS.zip"
+      - name: Sign (and notarise, when a Developer ID is configured)
+        id: sign
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: native/scripts/sign-macos.sh "package/Steam Controller MIDI"
+      - name: Zip
+        run: |
+          cp native/INSTALL-macOS.txt "package/Steam Controller MIDI/Install.txt"
+          ditto -c -k --keepParent "package/Steam Controller MIDI" "SteamControllerMIDI-macOS.zip"
       - name: Validate the Audio Unit
         continue-on-error: true
         run: |
