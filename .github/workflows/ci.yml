@@ -17,5 +17,8 @@ jobs:
       - name: C++ engine matches the TypeScript engine
         run: |
           npm run fixtures
-          g++ -std=c++17 -O1 -Wall -Wextra native/Tests/parity.cpp native/Source/Core.cpp -o parity
+          g++ -std=c++17 -O1 -Wall -Wextra -ffp-contract=off native/Tests/parity.cpp native/Source/Core.cpp -o parity
           ./parity native/Tests/fixtures.txt
+          # Again with FMA instructions available, as on Apple Silicon.
+          g++ -std=c++17 -O2 -march=haswell -ffp-contract=off native/Tests/parity.cpp native/Source/Core.cpp -o parity-fma
+          ./parity-fma native/Tests/fixtures.txt

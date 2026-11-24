@@ -41,6 +41,13 @@ FetchContent_MakeAvailable(JUCE hidapi)
 # ---- the engine on its own (no JUCE), plus its test ----
 add_library(scm_core STATIC Source/Core.cpp)
 target_include_directories(scm_core PUBLIC Source)
+# The engine must round exactly like the JavaScript version (the parity test
+# checks this). Fusing a multiply and an add into one FMA instruction, which
+# compilers do by default on Apple Silicon and other FMA-capable targets,
+# changes the last bit of some results and so occasionally a MIDI value.
+target_compile_options(scm_core PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>:/fp:precise>
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-ffp-contract=off>)
 
 if(SCM_BUILD_TESTS)
     enable_testing()
